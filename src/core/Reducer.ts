@@ -1,6 +1,9 @@
 import type { AgentState, AgentVisualState, NormalizedRecord } from "./types.js";
 
 export const IDLE_THRESHOLD_MS = 45_000; // SPEC.md ש1
+// a subagent silent this long is treated as finished (it left town). Live tail
+// rarely sees the completion signal, so prolonged silence is the fallback.
+export const SUBAGENT_GONE_MS = 120_000;
 
 export interface StateChange {
   agentId: string;
@@ -153,7 +156,10 @@ export class StateReducer {
     // an open tool_use means the agent is busy even if the file is momentarily
     // silent — don't let a long-running tool be misread as idle.
     if ((this.openToolUses.get(a.agentId)?.size ?? 0) > 0) return "working";
-    if (now - a.lastActivityTs > IDLE_THRESHOLD_MS) return "idle";
+    const silent = now - a.lastActivityTs;
+    // a subagent quiet for a long time has finished → mark done so it leaves town
+    if (a.kind === "subagent" && silent > SUBAGENT_GONE_MS) return "done";
+    if (silent > IDLE_THRESHOLD_MS) return "idle";
     return "working";
   }
 

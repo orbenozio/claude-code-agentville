@@ -501,7 +501,7 @@ function applyChange(c: StateChange) {
   retarget();
 }
 
-const DONE_VANISH_MS = 5 * 60 * 1000; // SPEC ש3
+const DONE_VANISH_MS = 90 * 1000; // finished agents walk home, then leave town
 function reap(now: number) {
   for (const [id, s] of sprites) {
     if (s.state === "done" && s.doneAt > 0 && now - s.doneAt > DONE_VANISH_MS) {

@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -8,6 +9,9 @@ import type { AgentState } from "../core/types.js";
 import { hottestSession, type SessionInfo } from "../spike/discovery.js";
 
 const AGENT_FILE_RE = /agent-([a-z0-9]+)\.jsonl$/i;
+// at startup, ignore subagent files that finished long ago — only resurrect
+// recently-active ones, so the town isn't flooded with the whole session history.
+const STALE_AGENT_MS = 180_000;
 // second data channel (SPEC §5.3): hooks write here; we merge it with the JSONL tail.
 const HOOK_EVENTS_FILE = path.join(os.homedir(), ".claude", "agentville", "events.jsonl");
 
@@ -52,10 +56,15 @@ export class SessionMonitor {
     });
     saWatcher.on("add", (file) => {
       const m = AGENT_FILE_RE.exec(path.basename(file));
-      if (m) {
-        this.addReader(file, m[1], false);
-        void this.pump();
-      }
+      if (!m) return;
+      void fs
+        .stat(file)
+        .then((st) => {
+          if (Date.now() - st.mtimeMs > STALE_AGENT_MS) return; // finished long ago — skip
+          this.addReader(file, m[1], false);
+          void this.pump();
+        })
+        .catch(() => {});
     });
     saWatcher.on("change", () => void this.pump());
 
