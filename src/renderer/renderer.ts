@@ -37,6 +37,25 @@ const MAYOR_COLOR = 0xffd23f;
 const HARDHAT_COLOR = 0xff7b00;
 
 const hud = document.getElementById("hud")!;
+
+// local time of day drives sky/ambient/lamps; an optional override lets you preview any time
+type TimeMode = "auto" | "dawn" | "day" | "dusk" | "night";
+let timeOverride: TimeMode = "auto";
+function localHour(): number {
+  switch (timeOverride) {
+    case "dawn":
+      return 6;
+    case "day":
+      return 13;
+    case "dusk":
+      return 19;
+    case "night":
+      return 23;
+    default:
+      return new Date().getHours() + new Date().getMinutes() / 60;
+  }
+}
+
 let townName = localStorage.getItem("agentville.town") || "Agentville";
 let projectName = "";
 function updateHud() {
@@ -98,18 +117,20 @@ const skyLayer = new Container(); // birds
 app.stage.addChild(bgStatic, cloudLayer, fishLayer, pathLayer, groundAnimalLayer, structStatic, houseWallLayer, agentLayer, roofLayer, skyLayer);
 
 // ---------------------------------------------------------------- weather (Open-Meteo, keyless)
-const weatherLayer = new Container(); // foreground: ambient tint + dim overlay + rain/snow
+const weatherLayer = new Container(); // foreground: ambient tint + lights + dim overlay + rain/snow
 const ambientTint = new Graphics(); // time-of-day tint over the whole village
+const streetLights = new Graphics(); // lamp glow — above the tint so it brightens the night
+streetLights.blendMode = "add";
 const weatherOverlay = new Graphics(); // weather dimming over the whole village
 const weatherFx = new Graphics(); // rain/snow particles
-weatherLayer.addChild(ambientTint, weatherOverlay, weatherFx);
+weatherLayer.addChild(ambientTint, streetLights, weatherOverlay, weatherFx);
 app.stage.addChild(weatherLayer);
 
 // tint the whole scene by local time of day (so the VILLAGE reflects it, not just the sky)
 function updateAmbient() {
   const W = app.screen.width;
   const H = app.screen.height;
-  const h = new Date().getHours() + new Date().getMinutes() / 60;
+  const h = localHour();
   let color = 0x000000;
   let alpha = 0;
   if (h < 5.5 || h >= 20) {
@@ -126,6 +147,42 @@ function updateAmbient() {
   } // dusk
   ambientTint.clear();
   if (alpha > 0) ambientTint.rect(0, 0, W, H).fill(color, alpha);
+}
+
+// six lampposts around the square; their head sits ~46px above the base point
+function lampPositions(): { x: number; y: number }[] {
+  const { cx, cy, rx, ry } = L.sq;
+  const pts: { x: number; y: number }[] = [];
+  const n = 6;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + Math.PI / 6;
+    pts.push({ x: cx + Math.cos(a) * (rx + 32), y: cy + Math.sin(a) * (ry + 26) });
+  }
+  return pts;
+}
+
+// street lamps + the welcome sign light up from dusk through dawn (local time)
+function updateLights() {
+  streetLights.clear();
+  const h = localHour();
+  const on = h < 6.2 || h >= 18.3;
+  if (!on) return;
+  for (const p of lampPositions()) {
+    const hy = p.y - 50; // lamp head
+    streetLights.circle(p.x, hy, 34).fill(0xffcf7a, 0.22); // soft halo
+    streetLights.circle(p.x, hy, 17).fill(0xffe6ad, 0.45);
+    streetLights.circle(p.x, hy, 6).fill(0xfff6d8); // bright bulb
+    streetLights.ellipse(p.x, p.y, 24, 9).fill(0xffe6a0, 0.14); // pool on the ground
+  }
+  // 3 small ground spotlights shining UP onto the welcome sign (not a central blob)
+  const sx = app.screen.width / 2;
+  const baseY = app.screen.height - 14;
+  const topY = app.screen.height - 84;
+  for (const dx of [-54, 0, 54]) {
+    const x = sx + dx;
+    streetLights.poly([x - 3, baseY, x - 14, topY, x + 14, topY, x + 3, baseY]).fill(0xffe6a8, 0.14); // light cone
+    streetLights.circle(x, baseY, 3).fill(0xfff2cc); // lit fixture
+  }
 }
 
 type WeatherKind = "clear" | "clouds" | "rain" | "snow" | "fog" | "thunder";
@@ -242,8 +299,7 @@ function lerpColor(a: number, b: number, t: number): number {
 function drawSky(W: number): Graphics {
   const g = new Graphics();
   const skyH = L.skyH + 30;
-  const now = new Date();
-  const h = now.getHours() + now.getMinutes() / 60;
+  const h = localHour();
   const night = h < 5.5 || h >= 20;
   const dawn = h >= 5.5 && h < 8;
   const dusk = h >= 18 && h < 20;
@@ -368,10 +424,24 @@ function drawTown() {
   structStatic.addChild(fruitTree(W - 70, L.riverY + 96, 0xb5179e));
   structStatic.addChild(fruitTree(60, H - 70, 0xff8c1a));
 
-  // welcome sign at the bottom entrance to town
+  // lampposts around the square (poles are part of the scene; the glow is drawn above the night tint)
+  const lamps = new Graphics();
+  for (const p of lampPositions()) {
+    lamps.rect(p.x - 2, p.y - 46, 4, 46).fill(0x3b3b42); // pole
+    lamps.rect(p.x - 5, p.y, 10, 4).fill(0x2f2f35); // base
+    lamps.circle(p.x, p.y - 50, 6).fill(0x4a4a52).stroke({ width: 2, color: 0x6a6a72 }); // fixture
+    lamps.poly([p.x - 6, p.y - 50, p.x + 6, p.y - 50, p.x + 3, p.y - 58, p.x - 3, p.y - 58]).fill(0x55555c); // cap
+  }
+  structStatic.addChild(lamps);
+
+  // welcome sign at the bottom entrance to town, with 3 little ground spotlights below it
   structStatic.addChild(townSign(W / 2, H - 56, townName));
+  const spots = new Graphics();
+  for (const dx of [-54, 0, 54]) spots.roundRect(W / 2 + dx - 4, H - 18, 8, 6, 2).fill(0x33333a);
+  structStatic.addChild(spots);
 
   updateAmbient(); // refresh the time-of-day tint over the whole village
+  updateLights(); // refresh lamp + sign glow for the current time
 }
 
 function colorForSlot(slot: number): number {
@@ -1241,6 +1311,12 @@ const setTown = () => {
 townGo.addEventListener("click", setTown);
 townInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") setTown();
+});
+
+const timeMode = document.getElementById("timeMode") as HTMLSelectElement;
+timeMode.addEventListener("change", () => {
+  timeOverride = timeMode.value as TimeMode;
+  drawTown(); // refresh sky + ambient + lamps for the previewed time
 });
 
 const cityInput = document.getElementById("city") as HTMLInputElement;
