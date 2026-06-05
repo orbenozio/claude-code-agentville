@@ -13,9 +13,12 @@
 
 ## Todo (הצעדים הבאים, לפי סדר)
 - [ ] **שלב 2.0** — ⚠️ error + 😴 rate-limit ויזואלית (badges + התנהגות דביקה ב-renderer)
-- [ ] **שלב 2.1** — חוסן tail: זיהוי רוטציה לפי size+חוסר-רצף (QA#4), אידמפוטנטיות activity בקריאה-חוזרת (QA#5), נעילת-sticky לגילוי
+- [ ] **שלב 2.1** — חוסן tail: debounce/throttle ל-IPC (ARCH§8), זיהוי רוטציה לפי size+חוסר-רצף (QA#4), אידמפוטנטיות activity (QA#5)
+- [ ] חוזה snapshot/diff ממוספר-seq + resync (ARCH§10) — כרגע diffs חשופים בלי זיהוי-פער
+- [ ] `claimSpawn`: התאמת spawn↔agent כש-2+ סוכנים מאותו type ב-JSONL-בלבד (ARCH; נפתר עם hooks)
 - [ ] `SubagentStop.exitStatus` — אבחנה בין done תקין לכישלון/timeout (QA#8)
 - [ ] (opt-in) אימות-חי אחרון של ה-hooks: `subagent_id`==`agentId` + פרומפט-הרשאה אמיתי יורה
+- [ ] (לתיעוד) sandbox:false ב-main (ARCH🟢) — פשרת preload; לשקול preload תואם-sandbox
 
 ## In progress
 
@@ -34,3 +37,6 @@
 - [x] שכבות z-order נכונות (ציפור בשמיים, כבשה מאחורי מבנים), כיווני-תנועה נכונים
 - [x] סצנה מורחבת: שמיים+עננים, נהר זורם+דג קופץ, עצי-פרי (תפוח/שזיף/תפוז), חיות-חווה (כבש/פרה/סוס/תרנגול) עם רעייה משותפת
 - [x] תיקוני הגהה (סוכן-משנה): typo `שביל`, `ממופתח`, וסתירת-SPEC על `SubagentStart`/`description` מול ה-spike
+- [x] שיפורי UX: בועת-מחשבה חיה (claimSpawn), שמות במלבן-לבן+פונט, חלון-הגדרות לחיות (⚙️), רספונסיביות (world בקנה-מידה אחיד)
+- [x] ביקורת ארכיטקט + תיקונים: סיגנל-דביק עקבי (clearStaleSignal), חיבור ערוץ ה-hooks החי ב-SessionMonitor (HookEventTail+מיזוג)
+- [x] רספונסיביות אמיתית מקצה-לקצה: בתים יחסית-למרכז + reflow ב-resize (נהר/כביש/שמיים נמתחים לרוחב מלא, בלי עיוות)

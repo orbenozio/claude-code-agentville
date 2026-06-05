@@ -1,12 +1,15 @@
+import os from "node:os";
 import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
-import { normalizeLine } from "../core/normalize.js";
+import { normalizeHookLine, normalizeLine } from "../core/normalize.js";
 import { StateReducer, type StateChange } from "../core/Reducer.js";
 import { TailReader } from "../core/TailReader.js";
 import type { AgentState } from "../core/types.js";
 import { hottestSession, type SessionInfo } from "../spike/discovery.js";
 
 const AGENT_FILE_RE = /agent-([a-z0-9]+)\.jsonl$/i;
+// second data channel (SPEC §5.3): hooks write here; we merge it with the JSONL tail.
+const HOOK_EVENTS_FILE = path.join(os.homedir(), ".claude", "agentville", "events.jsonl");
 
 /**
  * Live monitor for one session: tails the main JSONL + each subagent file,
@@ -16,6 +19,7 @@ const AGENT_FILE_RE = /agent-([a-z0-9]+)\.jsonl$/i;
 export class SessionMonitor {
   private readonly reducer = new StateReducer();
   private readonly readers = new Map<string, { reader: TailReader; agentId?: string }>();
+  private readonly hookReader = new TailReader(HOOK_EVENTS_FILE, 0);
   private watchers: FSWatcher[] = [];
   private tickTimer?: NodeJS.Timeout;
   private session?: SessionInfo;
@@ -55,7 +59,18 @@ export class SessionMonitor {
     });
     saWatcher.on("change", () => void this.pump());
 
-    this.watchers = [mainWatcher, saWatcher];
+    // hooks channel — tail the events file if/when it exists (forward-ready;
+    // no-op until the user installs the Agentville hook, see SPIKE-FINDINGS).
+    const hookWatcher = chokidar.watch(HOOK_EVENTS_FILE, {
+      usePolling: true,
+      interval: 300,
+      persistent: true,
+      ignoreInitial: false,
+    });
+    hookWatcher.on("add", () => void this.pump());
+    hookWatcher.on("change", () => void this.pump());
+
+    this.watchers = [mainWatcher, saWatcher, hookWatcher];
     this.tickTimer = setInterval(() => this.emit(this.reducer.tick()), 3000);
 
     await this.pump();
@@ -76,12 +91,19 @@ export class SessionMonitor {
   private async pump(): Promise<void> {
     if (!this.session) return;
     const all: StateChange[] = [];
+    // channel A — JSONL tail (main session + subagent files)
     for (const { reader, agentId } of this.readers.values()) {
       const lines = await reader.poll();
       for (const line of lines) {
         for (const r of normalizeLine(line, { sessionId: this.session.sessionId, fileAgentId: agentId })) {
           all.push(...this.reducer.apply(r));
         }
+      }
+    }
+    // channel B — hooks events (authoritative lifecycle/permission/error)
+    for (const line of await this.hookReader.poll()) {
+      for (const r of normalizeHookLine(line, this.session.sessionId).records) {
+        all.push(...this.reducer.apply(r));
       }
     }
     this.emit(all);

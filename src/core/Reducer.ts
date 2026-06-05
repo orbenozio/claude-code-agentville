@@ -1,7 +1,6 @@
 import type { AgentState, AgentVisualState, NormalizedRecord } from "./types.js";
 
 export const IDLE_THRESHOLD_MS = 45_000; // SPEC.md ש1
-const SIGNAL_STICKY_MS = 30_000; // error/rateLimited "stick" until a clean record
 
 export interface StateChange {
   agentId: string;
@@ -76,13 +75,25 @@ export class StateReducer {
       case "activity": {
         const id = rec.agentId ?? rec.sessionId; // main agent keyed by sessionId
         const kind = rec.agentId ? "subagent" : "main";
-        this.upsert(id, rec.sessionId, kind, { type: rec.type, spawnTs: rec.ts });
+        // a subagent appears via its own file BEFORE the spawning Agent's result
+        // links the id. Claim the pending spawn's task now so the working agent
+        // can show its task bubble immediately (don't wait for completion).
+        let task: string | undefined;
+        let type = rec.type;
+        if (kind === "subagent" && !this.agents.has(id)) {
+          const claimed = this.claimSpawn(rec.type);
+          if (claimed) {
+            task = claimed.task;
+            type = type ?? claimed.type;
+          }
+        }
+        this.upsert(id, rec.sessionId, kind, { type, task, spawnTs: rec.ts });
 
         if (rec.toolUseId) this.openSet(id).add(rec.toolUseId);
         if (rec.closesToolUseId) this.openSet(id).delete(rec.closesToolUseId);
 
         if (rec.signal) this.stickySignal.set(id, { kind: rec.signal, ts: rec.ts });
-        else this.clearStaleSignal(id, rec.ts);
+        else this.clearStaleSignal(id);
 
         const a = this.agents.get(id)!;
         a.lastActivityTs = rec.ts;
@@ -136,18 +147,19 @@ export class StateReducer {
   }
 
   private deriveState(a: AgentState, now: number): AgentVisualState {
+    // error/rateLimited are sticky until a clean record clears them (SPEC §6.2).
     const sig = this.stickySignal.get(a.agentId);
-    if (sig && now - sig.ts < SIGNAL_STICKY_MS) return sig.kind;
+    if (sig) return sig.kind;
     // an open tool_use means the agent is busy even if the file is momentarily
-    // silent — don't let a long-running tool be misread as idle (SPEC §6.2).
+    // silent — don't let a long-running tool be misread as idle.
     if ((this.openToolUses.get(a.agentId)?.size ?? 0) > 0) return "working";
     if (now - a.lastActivityTs > IDLE_THRESHOLD_MS) return "idle";
     return "working";
   }
 
-  private clearStaleSignal(id: string, now: number): void {
-    const sig = this.stickySignal.get(id);
-    if (sig && now - sig.ts >= 0) this.stickySignal.delete(id); // a clean record clears it
+  /** A clean record (assistant/tool_use without an error signal) clears a sticky signal. */
+  private clearStaleSignal(id: string): void {
+    this.stickySignal.delete(id);
   }
 
   private upsert(
@@ -178,6 +190,27 @@ export class StateReducer {
       lastActivityTs: fields.spawnTs,
       spawnTs: fields.spawnTs,
     });
+  }
+
+  /** Claim a pending JSONL spawn for a newly-appeared subagent — prefer a
+   *  matching subagent_type, else the oldest unclaimed one (FIFO). */
+  private claimSpawn(type?: string): { task?: string; type?: string } | undefined {
+    let oldestKey: string | undefined;
+    let oldestTs = Infinity;
+    for (const [k, v] of this.pendingSpawns) {
+      if (type && v.type === type) {
+        this.pendingSpawns.delete(k);
+        return { task: v.task, type: v.type };
+      }
+      if (v.ts < oldestTs) {
+        oldestTs = v.ts;
+        oldestKey = k;
+      }
+    }
+    if (!oldestKey) return undefined;
+    const v = this.pendingSpawns.get(oldestKey)!;
+    this.pendingSpawns.delete(oldestKey);
+    return { task: v.task, type: v.type };
   }
 
   private openSet(id: string): Set<string> {

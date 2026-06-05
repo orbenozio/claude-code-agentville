@@ -40,6 +40,7 @@ const app = new Application();
 await app.init({ resizeTo: window, background: 0x7ec850, antialias: true });
 document.getElementById("app")!.appendChild(app.canvas);
 
+
 // ---------------------------------------------------------------- layout
 interface Layout {
   skyH: number;
@@ -84,6 +85,7 @@ const houseWallLayer = new Container(); // per-house walls
 const agentLayer = new Container(); // characters
 const roofLayer = new Container(); // house roofs (in front → agent looks "inside")
 const skyLayer = new Container(); // birds
+// scene fills the real window edge-to-edge; layout reflows on resize
 app.stage.addChild(bgStatic, cloudLayer, fishLayer, pathLayer, groundAnimalLayer, structStatic, houseWallLayer, agentLayer, roofLayer, skyLayer);
 
 // ---------------------------------------------------------------- static town
@@ -169,36 +171,46 @@ interface House {
   path: Graphics; // ground plane
   walls: Container; // structure
   roof: Container; // front
+  h: number;
 }
-function buildHouse(x: number, y: number, color: number, isMayor: boolean): House {
+// houses are drawn around their own origin so they can be re-positioned on resize
+function buildHouse(color: number, isMayor: boolean): House {
   const w = isMayor ? 92 : 72;
   const h = isMayor ? 64 : 52;
 
-  const path = new Graphics();
-  path.roundRect(x - 9, y + h / 2 - 6, 18, L.roadY - (y + h / 2) + 10, 9).fill(0xcaa472);
+  const path = new Graphics(); // length set in placeHouse (depends on road position)
 
   const walls = new Container();
   const g = new Graphics();
-  g.roundRect(x - w / 2, y - h / 2, w, h, 5).fill(0xf3ead6).stroke({ width: 2, color: 0x00000018 });
-  g.roundRect(x - 15, y - 6, 30, h / 2 + 6, 4).fill(0x4a3b2a); // doorway
-  g.roundRect(x + w / 2 - 24, y - h / 2 + 10, 14, 14, 2).fill(0xbfe3ff); // window
+  g.roundRect(-w / 2, -h / 2, w, h, 5).fill(0xf3ead6).stroke({ width: 2, color: 0x00000018 });
+  g.roundRect(-15, -6, 30, h / 2 + 6, 4).fill(0x4a3b2a); // doorway
+  g.roundRect(w / 2 - 24, -h / 2 + 10, 14, 14, 2).fill(0xbfe3ff); // window
   walls.addChild(g);
   if (isMayor) {
     const lbl = new Text({ text: "TOWN HALL", style: { fontFamily: "Segoe UI", fontSize: 10, fontWeight: "800", fill: 0x5a3d1a } });
     lbl.anchor.set(0.5);
-    lbl.position.set(x, y + h / 2 + 9);
+    lbl.position.set(0, h / 2 + 9);
     walls.addChild(lbl);
   }
 
   const roof = new Container();
   const r = new Graphics();
-  r.poly([x - w / 2 - 6, y - h / 2 + 2, x, y - h / 2 - 26, x + w / 2 + 6, y - h / 2 + 2]).fill(color).stroke({ width: 2, color: 0x00000022 });
+  r.poly([-w / 2 - 6, -h / 2 + 2, 0, -h / 2 - 26, w / 2 + 6, -h / 2 + 2]).fill(color).stroke({ width: 2, color: 0x00000022 });
   if (isMayor) {
-    r.rect(x - 1, y - h / 2 - 52, 2, 26).fill(0x6b4423);
-    r.poly([x + 1, y - h / 2 - 52, x + 24, y - h / 2 - 45, x + 1, y - h / 2 - 38]).fill(0xe63946);
+    r.rect(-1, -h / 2 - 52, 2, 26).fill(0x6b4423);
+    r.poly([1, -h / 2 - 52, 24, -h / 2 - 45, 1, -h / 2 - 38]).fill(0xe63946);
   }
   roof.addChild(r);
-  return { path, walls, roof };
+  return { path, walls, roof, h };
+}
+
+// position a house at (x,y) and draw its path down to the current road
+function placeHouse(house: House, x: number, y: number) {
+  house.walls.position.set(x, y);
+  house.roof.position.set(x, y);
+  house.path.position.set(x, y);
+  const len = Math.max(0, L.roadY - (y + house.h / 2) + 10);
+  house.path.clear().roundRect(-9, house.h / 2 - 6, 18, len, 9).fill(0xcaa472);
 }
 
 // ---------------------------------------------------------------- agent sprite
@@ -208,6 +220,8 @@ class AgentSprite extends Container {
   private hat = new Graphics();
   private face = new Graphics();
   private badge = new Text({ text: "", style: { fontSize: 18 } });
+  private nameplate = new Container();
+  private nameBg = new Graphics();
   private nameLabel: Text;
   private bubble = new Container();
   private bubbleText: Text;
@@ -232,11 +246,13 @@ class AgentSprite extends Container {
     this.color = kind === "main" ? MAYOR_COLOR : colorForSlot(slot);
 
     this.nameLabel = new Text({
-      text: kind === "main" ? "🎩 Mayor" : typeName ?? "agent",
-      style: { fontFamily: "Segoe UI", fontSize: 12, fontWeight: "700", fill: 0x12330f },
+      text: "",
+      style: { fontFamily: '"Comic Sans MS", "Trebuchet MS", Verdana, sans-serif', fontSize: 12, fontWeight: "700", fill: 0x223018 },
     });
     this.nameLabel.anchor.set(0.5);
-    this.nameLabel.y = 30;
+    this.nameplate.y = 31;
+    this.nameplate.addChild(this.nameBg, this.nameLabel);
+    this.setName(kind === "main" ? "🎩 Mayor" : typeName ?? "agent");
 
     this.badge.anchor.set(0.5);
     this.badge.y = -34;
@@ -248,12 +264,26 @@ class AgentSprite extends Container {
     this.bubble.visible = false;
 
     this.inner.addChild(this.body, this.hat, this.face);
-    this.addChild(this.inner, this.badge, this.nameLabel, this.bubble);
+    this.addChild(this.inner, this.badge, this.nameplate, this.bubble);
     this.redraw();
+  }
+
+  private setName(text: string) {
+    this.nameLabel.text = text;
+    const w = this.nameLabel.width + 14;
+    const h = this.nameLabel.height + 6;
+    this.nameBg
+      .clear()
+      .roundRect(-w / 2, -h / 2, w, h, h / 2)
+      .fill(0xffffff)
+      .stroke({ width: 1.5, color: this.color });
   }
 
   attachHouse(house: House) {
     this.house = house;
+  }
+  houseRef(): House | undefined {
+    return this.house;
   }
   housePath(): Graphics | undefined {
     return this.house?.path;
@@ -305,7 +335,7 @@ class AgentSprite extends Container {
     this.state = state;
     if (state === "done" && this.doneAt === 0) this.doneAt = performance.now();
     this.badge.text = STATE_BADGE[state];
-    if (typeName && this.kind === "subagent") this.nameLabel.text = typeName;
+    if (typeName && this.kind === "subagent" && typeName !== this.nameLabel.text) this.setName(typeName);
     const showBubble = state === "working" && !!task;
     this.bubble.visible = showBubble;
     if (showBubble) this.drawThought(shortTask(task!));
@@ -412,8 +442,9 @@ let nextHomeSlot = 0;
 const freeSlots: number[] = [];
 const allocSlot = () => (freeSlots.length ? freeSlots.shift()! : nextHomeSlot++);
 
-function homePos(slot: number): { x: number; y: number } {
-  return { x: L.homeStartX + slot * L.homeGapX, y: L.homeY };
+// anchor (house center) for a sprite, in current layout coords
+function houseAnchor(sp: AgentSprite): { x: number; y: number } {
+  return sp.kind === "main" ? L.mayor : { x: L.homeStartX + sp.slot * L.homeGapX, y: L.homeY };
 }
 
 function ensureSprite(s: { agentId: string; kind: "main" | "subagent"; type?: string }): AgentSprite {
@@ -424,16 +455,30 @@ function ensureSprite(s: { agentId: string; kind: "main" | "subagent"; type?: st
     sprites.set(s.agentId, sp);
     agentLayer.addChild(sp);
 
-    const pos = s.kind === "main" ? L.mayor : homePos(slot);
-    const house = buildHouse(pos.x, pos.y, sp.color, s.kind === "main");
+    const house = buildHouse(sp.color, s.kind === "main");
     sp.attachHouse(house);
     pathLayer.addChild(house.path);
     houseWallLayer.addChild(house.walls);
     roofLayer.addChild(house.roof);
+
+    const pos = houseAnchor(sp);
+    placeHouse(house, pos.x, pos.y);
     sp.setHome(pos.x, pos.y + (s.kind === "main" ? 34 : 28));
     sp.position.set(sp.home.x, sp.home.y);
   }
   return sp;
+}
+
+// re-place all houses/homes after the layout changed (window resize)
+function reflow() {
+  drawTown();
+  for (const sp of sprites.values()) {
+    const house = sp.houseRef();
+    const pos = houseAnchor(sp);
+    if (house) placeHouse(house, pos.x, pos.y);
+    sp.setHome(pos.x, pos.y + (sp.kind === "main" ? 34 : 28));
+  }
+  retarget();
 }
 
 function retarget() {
@@ -595,10 +640,23 @@ class Animal extends Container {
   }
 }
 
+const animalConfig = {
+  enabled: { bird: true, sheep: true, cow: true, horse: true, chicken: true } as Record<AnimalKind, boolean>,
+  max: 8,
+  fish: true,
+  clouds: true,
+};
+
 const animals: Animal[] = [];
 function spawnAnimal() {
-  if (animals.length > 8) return;
-  const kind: AnimalKind = Math.random() < 0.3 ? "bird" : GROUND_KINDS[Math.floor(Math.random() * GROUND_KINDS.length)];
+  if (animals.length >= animalConfig.max) return;
+  const enabled = (["bird", ...GROUND_KINDS] as AnimalKind[]).filter((k) => animalConfig.enabled[k]);
+  if (enabled.length === 0) return;
+  const ground = enabled.filter((k) => k !== "bird");
+  let kind: AnimalKind;
+  if (animalConfig.enabled.bird && (ground.length === 0 || Math.random() < 0.3)) kind = "bird";
+  else kind = ground[Math.floor(Math.random() * ground.length)];
+
   const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
   const y = kind === "bird" ? 40 + Math.random() * 80 : app.screen.height - 185 - Math.random() * 35;
   const a = new Animal(kind, y, dir);
@@ -663,6 +721,7 @@ class Fish extends Container {
 }
 const fishes: Fish[] = [];
 function spawnFish() {
+  if (!animalConfig.fish) return;
   const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
   const x = 80 + Math.random() * (app.screen.width - 160);
   const fish = new Fish(x, dir);
@@ -673,11 +732,8 @@ setInterval(spawnFish, 5000);
 setTimeout(spawnFish, 3000);
 
 // ---------------------------------------------------------------- main loop
-drawTown();
-window.addEventListener("resize", () => {
-  drawTown();
-  retarget();
-});
+drawTown(); // static scene fills the window
+window.addEventListener("resize", reflow); // edge-to-edge reflow on resize
 
 app.ticker.add((time) => {
   const dt = time.deltaTime;
@@ -698,6 +754,35 @@ app.ticker.add((time) => {
     }
   }
   reap(performance.now());
+});
+
+// ---------------------------------------------------------------- settings panel
+const gear = document.getElementById("gear")!;
+const panel = document.getElementById("panel")!;
+gear.addEventListener("click", () => panel.classList.toggle("open"));
+for (const el of document.querySelectorAll<HTMLInputElement>("input[data-animal]")) {
+  el.addEventListener("change", () => {
+    animalConfig.enabled[el.dataset.animal as AnimalKind] = el.checked;
+  });
+}
+for (const el of document.querySelectorAll<HTMLInputElement>("input[data-toggle]")) {
+  el.addEventListener("change", () => {
+    const t = el.dataset.toggle as "fish" | "clouds";
+    animalConfig[t] = el.checked;
+    if (t === "clouds") cloudLayer.visible = el.checked;
+  });
+}
+const maxEl = document.getElementById("maxAnimals") as HTMLInputElement;
+const maxVal = document.getElementById("maxVal")!;
+maxEl.addEventListener("input", () => {
+  animalConfig.max = Number(maxEl.value);
+  maxVal.textContent = maxEl.value;
+  // trim immediately if over the new cap
+  while (animals.length > animalConfig.max) {
+    const a = animals.pop()!;
+    a.parent?.removeChild(a);
+    a.destroy({ children: true });
+  }
 });
 
 window.agentville.onSessionInfo((info) => {
