@@ -133,7 +133,7 @@ Agentville **לא** מתערב בהרצת Claude Code, לא משנה את קבצ
 
 **מסלול spawn (עם hook — המסלול הוודאי):**
 
-1. סוכן-משנה משוגר → Claude Code יורה `SubagentStart` → ה-hook כותב שורה ל-`events.jsonl` עם `agentId`, `subagentType`, ו-(לרוב) `description`.
+1. סוכן-משנה משוגר → Claude Code יורה `SubagentStart` → ה-hook כותב שורה ל-`events.jsonl` עם `subagent_id` ו-`subagent_type` בלבד — **לא** `description` (אומת ב-spike; טקסט המשימה מגיע מ-JSONL, ראו `SPIKE-FINDINGS.md`).
 2. `HookEventTail` קורא → `HookParser` מנרמל ל-`{ kind:"agent_spawn", source:"hook", agentId, type, task }`.
 3. `EventMerger` → `StateReducer` יוצר `AgentState{ id, type, task, state:"working" }`; `SessionWatcher` מתחיל לעקוב אחרי `subagents/agent-<agentId>.jsonl` (לפרטי-פעילות).
 
@@ -143,7 +143,7 @@ Agentville **לא** מתערב בהרצת Claude Code, לא משנה את קבצ
 2. בקרוב מגיע `toolUseResult` עם `status` + `agentId` → `{ kind:"agent_linked", toolUseId, agentId }`.
 3. `EventMerger` ממזג לפי `toolUseId` ומשלים את ה-`agentId`. עד אז הדמות "בהקמה" ממופתחת לפי `toolUseId`, וכשמגיע ה-`agentId` ממזגים — מונע "דמות-רפאים" כפולה.
 
-> כשערוץ ה-hooks פעיל, חלון-המירוץ של description-לפני-agentId נעלם לגמרי (ה-`SubagentStart` כבר נושא `agentId`). מנגנון המיזוג-לפי-`toolUseId` נשמר רק כ-fallback ל-JSONL-בלבד.
+> כשערוץ ה-hooks פעיל, ה-`SubagentStart` נושא `subagent_id` מיידית (שקילותו ל-`agentId` של קובץ ה-JSONL ממתינה לאימות-חי), כך שזיהוי הסוכן אינו תלוי בחלון-המירוץ של ה-JSONL. אך מאחר שה-hook **אינו** נושא `description`, טקסט המשימה עדיין מגיע מ-JSONL — ולכן מנגנון המיזוג בין הערוצים נשמר תמיד (לא רק כ-fallback).
 
 **מסלול done:**
 
@@ -251,7 +251,7 @@ interface AgentState {
 
 ### מסלול עתידי לריבוי-פרויקטים
 
-* מודל ה-StateStore כבר מפתחי לפי `{sessionId, agentId}`; הרחבה = מספר "שכונות" (districts), אחת לכל פרויקט פעיל, עם תקרת-N והשהיית-עיבוד ללא-פעילים. אין שינוי-יסוד.
+* מודל ה-StateStore כבר ממופתח לפי `{sessionId, agentId}`; הרחבה = מספר "שכונות" (districts), אחת לכל פרויקט פעיל, עם תקרת-N והשהיית-עיבוד ללא-פעילים. אין שינוי-יסוד.
 
 ***
 
