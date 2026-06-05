@@ -67,7 +67,7 @@ function computeLayout(): Layout {
     mayor: { x: 110, y: 242 },
     roadY,
     factory,
-    factoryFloor: { x: factory.x - 95, y: factory.y - 20, w: 150, h: 90 },
+    factoryFloor: { x: factory.x - 104, y: factory.y + 24, w: 208, h: 58 }, // lower plaza, around the fountain
   };
 }
 let L = computeLayout();
@@ -102,6 +102,59 @@ function fruitTree(x: number, groundY: number, fruit: number) {
   return t;
 }
 
+function lerpColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  return (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
+}
+
+// build the sky graphic for the current local hour
+function drawSky(W: number): Graphics {
+  const g = new Graphics();
+  const skyH = L.skyH + 30;
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60;
+  const night = h < 5.5 || h >= 20;
+  const dawn = h >= 5.5 && h < 8;
+  const dusk = h >= 18 && h < 20;
+  let top: number, bot: number;
+  if (night) [top, bot] = [0x0b1026, 0x2a3a66];
+  else if (dawn) [top, bot] = [0xef9f5e, 0xffe3b3];
+  else if (dusk) [top, bot] = [0xe1633f, 0xffc187];
+  else [top, bot] = [0x5fb0ff, 0xcdeeff]; // day
+
+  const bands = 10;
+  for (let i = 0; i < bands; i++) g.rect(0, (skyH / bands) * i, W, skyH / bands + 1).fill(lerpColor(top, bot, i / (bands - 1)));
+
+  if (night) {
+    // stars (deterministic positions so they don't jump on redraw)
+    for (let i = 0; i < 40; i++) {
+      const sx = (i * 197.3) % W;
+      const sy = 10 + ((i * 71.7) % (skyH - 30));
+      g.circle(sx, sy, i % 5 === 0 ? 1.6 : 1).fill(0xfff8e0);
+    }
+    // moon
+    const mx = W * 0.82, my = 42;
+    g.circle(mx, my, 16).fill(0xeef0d8);
+    g.circle(mx - 5, my - 4, 3).circle(mx + 4, my + 3, 2.5).circle(mx + 2, my - 6, 1.8).fill(0xdadcc2); // craters
+  } else {
+    // sun arcs across the sky by hour (rises ~6, sets ~18)
+    const frac = Math.min(1, Math.max(0, (h - 6) / 12));
+    const sx = W * (0.1 + frac * 0.8);
+    const sy = skyH * 0.92 - Math.sin(frac * Math.PI) * skyH * 0.62;
+    const sun = dawn || dusk ? 0xffb24d : 0xfff2a0;
+    g.circle(sx, sy, 26).fill(sun, 0.25); // glow
+    g.circle(sx, sy, 16).fill(sun);
+    // a low moon also rising at dusk
+    if (dusk) {
+      g.circle(W * 0.86, 36, 12).fill(0xeef0d8);
+      g.circle(W * 0.86 - 4, 33, 2).fill(0xdadcc2);
+    }
+  }
+  g.rect(0, L.skyH + 22, W, 10).fill(0xa9d66b); // soft horizon blend onto the grass
+  return g;
+}
+
 function drawTown() {
   bgStatic.removeChildren();
   structStatic.removeChildren();
@@ -109,11 +162,8 @@ function drawTown() {
   const W = app.screen.width;
   const H = app.screen.height;
 
-  // sky band at the top, grass fills the rest (canvas bg is already grass-green)
-  const sky = new Graphics();
-  sky.rect(0, 0, W, L.skyH + 30).fill(0xbfe7ff);
-  sky.rect(0, L.skyH + 22, W, 10).fill(0xa9d66b); // soft horizon blend
-  bgStatic.addChild(sky);
+  // sky reflects the real local time of day (dawn / day / dusk / night)
+  bgStatic.addChild(drawSky(W));
 
   // winding river just under the sky
   const river = new Graphics();
@@ -140,19 +190,25 @@ function drawTown() {
   for (let x = 70; x < W - 60; x += 46) road.rect(x, L.roadY - 2, 22, 4).fill(0xead9b8);
   bgStatic.addChild(road);
 
-  // factory (structure)
-  const f = new Graphics();
+  // town square — where agents gather to work, each at their own craft
+  const sq = new Graphics();
   const { x: fx, y: fy } = L.factory;
-  f.roundRect(fx - 100, fy - 60, 200, 150, 8).fill(0x9aa0aa);
-  f.rect(fx - 100, fy - 60, 200, 22).fill(0x767d88);
-  f.rect(fx + 56, fy - 96, 22, 46).fill(0x767d88);
-  f.rect(fx + 22, fy - 86, 20, 36).fill(0x767d88);
-  f.roundRect(fx - 18, fy + 40, 40, 50, 3).fill(0x555b64);
-  for (let i = 0; i < 3; i++) f.roundRect(fx - 80 + i * 46, fy - 20, 32, 30, 3).fill(0xbfe3ff);
-  structStatic.addChild(f);
-  const fl = new Text({ text: "FACTORY", style: { fontFamily: "Segoe UI", fontSize: 13, fontWeight: "800", fill: 0xffffff } });
+  sq.ellipse(fx, fy + 26, 128, 86).fill(0xd8c7a2).stroke({ width: 4, color: 0xbfa97f }); // cobble plaza
+  // cobble texture dots
+  for (let i = 0; i < 26; i++) {
+    const ang = (i / 26) * Math.PI * 2;
+    sq.circle(fx + Math.cos(ang) * (40 + (i % 4) * 18), fy + 26 + Math.sin(ang) * (28 + (i % 3) * 12), 2).fill(0xc7b48c);
+  }
+  // central fountain
+  sq.circle(fx, fy + 6, 30).fill(0x9fb7c9).stroke({ width: 4, color: 0x7a8fa3 }); // pool
+  sq.circle(fx, fy + 6, 30).fill(0x8fb6d6, 0.5);
+  sq.rect(fx - 4, fy - 18, 8, 24).fill(0x8a93a0); // column
+  sq.circle(fx, fy - 20, 8).fill(0x9fb7c9).stroke({ width: 2, color: 0x7a8fa3 }); // top basin
+  sq.circle(fx - 6, fy - 12, 2).circle(fx + 6, fy - 12, 2).circle(fx, fy - 24, 2).fill(0xbfe3ff); // water
+  structStatic.addChild(sq);
+  const fl = new Text({ text: "TOWN SQUARE", style: { fontFamily: "Segoe UI", fontSize: 12, fontWeight: "800", fill: 0x6a5230 } });
   fl.anchor.set(0.5);
-  fl.position.set(fx, fy - 47);
+  fl.position.set(fx, fy + 96);
   structStatic.addChild(fl);
 
   // fruit trees scattered in the meadow (apple / plum / orange)
@@ -165,6 +221,27 @@ function drawTown() {
 function colorForSlot(slot: number): number {
   return PALETTE[slot % PALETTE.length];
 }
+
+// ---------------------------------------------------------------- agent role
+// best-effort: the only certain signal is `type`; task text refines it (SPEC caveat)
+type Role = "builder" | "reviewer" | "architect" | "researcher" | "mayor" | "generic";
+function roleFor(kind: "main" | "subagent", type: string | undefined, task: string | undefined): Role {
+  if (kind === "main") return "mayor";
+  const s = `${type ?? ""} ${task ?? ""}`.toLowerCase();
+  if (/review|reviewer|\bqa\b|audit|verif|proofread|inspect|lint|\btest/.test(s)) return "reviewer";
+  if (/architect|\bspec\b|design|draft|character|איפיון|plan\b/.test(s)) return "architect";
+  if (/research|explore|guide|\bdocs?\b|investigat|study|search|find|count|read/.test(s)) return "researcher";
+  if (/build|implement|code|create|\badd\b|write|fix|refactor|scaffold|setup|generate/.test(s)) return "builder";
+  return "generic";
+}
+const ROLE_EMOJI: Record<Role, string> = {
+  builder: "🏗️",
+  reviewer: "🔍",
+  architect: "📐",
+  researcher: "📚",
+  mayor: "🏛️",
+  generic: "🔧",
+};
 
 // ---------------------------------------------------------------- house (path + walls + roof)
 interface House {
@@ -239,6 +316,15 @@ class AgentSprite extends Container {
   private zClock = 0;
   private wanderClock = 0;
   private wanderTarget?: { x: number; y: number };
+  // role-specific activity prop (SPEC: build→structure, review→magnifier, etc.)
+  private prop = new Container();
+  private propA = new Graphics(); // the "thing" (structure / document / book)
+  private propB = new Graphics(); // the tool (hammer / magnifier / pencil)
+  private role: Role = "generic";
+  private propPhase = 0;
+  private buildStage = 0;
+  private lastType?: string;
+  private lastTask?: string;
 
   constructor(public agentId: string, public kind: "main" | "subagent", typeName: string | undefined, slot: number) {
     super();
@@ -263,8 +349,10 @@ class AgentSprite extends Container {
     });
     this.bubble.visible = false;
 
+    this.prop.addChild(this.propA, this.propB);
+    this.prop.visible = false;
     this.inner.addChild(this.body, this.hat, this.face);
-    this.addChild(this.inner, this.badge, this.nameplate, this.bubble);
+    this.addChild(this.inner, this.prop, this.badge, this.nameplate, this.bubble);
     this.redraw();
   }
 
@@ -310,7 +398,8 @@ class AgentSprite extends Container {
       this.hat.rect(-r - 2, -r - 4, (r + 2) * 2, 4).fill(0x1a1a1a); // brim
       this.hat.roundRect(-9, -r - 18, 18, 16, 2).fill(0x1a1a1a); // crown
       this.hat.rect(-9, -r - 9, 18, 3).fill(0xe63946); // band
-    } else if (working) {
+    } else if (working && (this.role === "builder" || this.role === "generic")) {
+      // only the builders wear the hard hat; other roles are identified by their prop
       this.hat.roundRect(-r - 1, -r - 6, (r + 1) * 2, 8, 3).fill(HARDHAT_COLOR);
       this.hat.roundRect(-7, -r - 12, 14, 8, 3).fill(HARDHAT_COLOR);
     }
@@ -336,11 +425,121 @@ class AgentSprite extends Container {
     if (state === "done" && this.doneAt === 0) this.doneAt = performance.now();
     this.badge.text = STATE_BADGE[state];
     if (typeName && this.kind === "subagent" && typeName !== this.nameLabel.text) this.setName(typeName);
-    const showBubble = state === "working" && !!task;
+    if (typeName) this.lastType = typeName;
+    if (task) this.lastTask = task;
+
+    const working = state === "working" || state === "error" || state === "rateLimited";
+    let roleChanged = false;
+    if (working) {
+      const role = roleFor(this.kind, this.lastType, this.lastTask);
+      if (role !== this.role || this.prop.children.length === 0) {
+        this.buildProp(role);
+        roleChanged = true;
+      }
+      if (state === "working") this.badge.text = ROLE_EMOJI[role]; // craft icon (error/rate keep ⚠️/😴)
+    }
+    this.prop.visible = working;
+
+    const showBubble = state === "working" && !!this.lastTask;
     this.bubble.visible = showBubble;
-    if (showBubble) this.drawThought(shortTask(task!));
-    if (was !== state) this.redraw();
+    if (showBubble) this.drawThought(shortTask(this.lastTask!));
+    if (was !== state || roleChanged) this.redraw();
     if (state === "working" && was !== "working") this.wanderTarget = undefined;
+  }
+
+  private buildProp(role: Role) {
+    this.role = role;
+    this.buildStage = 0;
+    this.propPhase = 0;
+    const a = this.propA.clear();
+    const b = this.propB.clear();
+    a.position.set(0, 0);
+    b.position.set(0, 0);
+    a.rotation = 0;
+    b.rotation = 0;
+    switch (role) {
+      case "builder":
+        this.drawStructure();
+        b.rect(-1, -11, 2, 13).fill(0x6b4423); // hammer handle
+        b.rect(-5, -14, 10, 5).fill(0x555b64); // head
+        b.position.set(13, -2);
+        break;
+      case "reviewer":
+        a.roundRect(0, 0, 16, 20, 2).fill(0xffffff).stroke({ width: 1, color: 0x99a3b0 });
+        a.rect(3, 4, 10, 1.5).rect(3, 8, 10, 1.5).rect(3, 12, 7, 1.5).fill(0xb9c0cc);
+        a.position.set(15, -6);
+        b.circle(0, 0, 5).fill(0xcde6ff).stroke({ width: 2, color: 0x42505f });
+        b.rect(3, 3, 2.5, 7).fill(0x42505f); // handle
+        b.position.set(20, -6);
+        break;
+      case "architect":
+        a.roundRect(0, 0, 18, 14, 2).fill(0xf6e6b0).stroke({ width: 1, color: 0xcaa15a });
+        a.rect(3, 4, 12, 1).rect(3, 7, 12, 1).rect(3, 10, 9, 1).fill(0xb89b5e);
+        a.position.set(14, -2);
+        b.rect(0, 0, 9, 2).fill(0xf2c14e); // pencil body
+        b.poly([9, 0, 12, 1, 9, 2]).fill(0x6b4423); // tip
+        b.position.set(15, 2);
+        break;
+      case "researcher":
+        a.poly([0, 0, 9, -2, 9, 8, 0, 9]).fill(0xffffff).stroke({ width: 1, color: 0xaab2bf });
+        a.poly([10, -2, 19, 0, 19, 9, 10, 8]).fill(0xf1f1f3).stroke({ width: 1, color: 0xaab2bf });
+        a.rect(9, -2, 1, 11).fill(0x8a6b3f); // spine
+        a.position.set(12, -4);
+        break;
+      case "mayor":
+        a.roundRect(0, 0, 16, 12, 2).fill(0xf3e7c6).stroke({ width: 1, color: 0xc9a86a });
+        a.rect(0, 0, 3, 12).fill(0xd9b87a).rect(13, 0, 3, 12).fill(0xd9b87a); // rolled ends
+        a.position.set(16, -2);
+        b.poly([0, 0, 2, -11, 4, 0]).fill(0xffffff).stroke({ width: 1, color: 0xc9cdd4 }); // quill
+        b.position.set(18, 2);
+        break;
+      case "generic":
+        b.rect(-1, -8, 2, 12).fill(0x9aa0aa);
+        b.circle(0, -8, 3).stroke({ width: 2, color: 0x9aa0aa });
+        b.position.set(14, 0);
+        break;
+    }
+  }
+
+  private drawStructure() {
+    const g = this.propA.clear();
+    g.ellipse(0, 8, 15, 5).fill(0xb9b2a6); // base platform
+    if (this.buildStage >= 1) g.circle(0, 2, 11).fill(0x9fb7c9).stroke({ width: 2, color: 0x7a8fa3 }); // pool
+    if (this.buildStage >= 2) g.rect(-3, -10, 6, 12).fill(0x8a93a0); // column
+    if (this.buildStage >= 3) {
+      g.circle(0, -12, 5).fill(0x9fb7c9).stroke({ width: 1, color: 0x7a8fa3 }); // spout bowl
+      g.circle(-4, -5, 1.5).circle(4, -5, 1.5).fill(0xbfe3ff); // water
+    }
+    g.position.set(23, -2);
+  }
+
+  private animateProp(dt: number) {
+    this.propPhase += dt;
+    const p = this.propPhase;
+    switch (this.role) {
+      case "builder":
+        this.propB.rotation = -0.7 + Math.abs(Math.sin(p * 0.18)) * 0.9; // hammer swing
+        if (p > (this.buildStage + 1) * 110 && this.buildStage < 3) {
+          this.buildStage++;
+          this.drawStructure();
+        }
+        break;
+      case "reviewer":
+        this.propB.position.set(18 + Math.cos(p * 0.08) * 4, -6 + Math.sin(p * 0.13) * 3); // scanning
+        break;
+      case "architect":
+        this.propB.position.set(13 + Math.sin(p * 0.26) * 5, 2 + Math.abs(Math.sin(p * 0.26)) * 1.2); // writing
+        break;
+      case "mayor":
+        this.propB.position.set(16 + Math.sin(p * 0.22) * 4, 2 + Math.abs(Math.sin(p * 0.22)) * 1.2);
+        break;
+      case "researcher":
+        this.propA.rotation = Math.sin(p * 0.1) * 0.06; // page flutter
+        break;
+      case "generic":
+        this.propB.rotation = Math.sin(p * 0.2) * 0.5; // turning a wrench
+        break;
+    }
   }
 
   private drawThought(text: string) {
@@ -402,7 +601,7 @@ class AgentSprite extends Container {
 
     if (this.state === "working" && !moving) {
       this.wanderClock += dt;
-      if (!this.wanderTarget || this.wanderClock > 90) {
+      if (!this.wanderTarget || this.wanderClock > 140) {
         this.wanderClock = 0;
         const z = L.factoryFloor;
         this.wanderTarget = { x: z.x + Math.random() * z.w, y: z.y + Math.random() * z.h };
@@ -410,6 +609,8 @@ class AgentSprite extends Container {
     } else if (this.state !== "working") {
       this.wanderTarget = undefined;
     }
+
+    if (this.prop.visible && !moving) this.animateProp(dt); // play the role activity while stationed
 
     for (const z of this.zzz) {
       z.t.y += z.vy * dt;
@@ -734,6 +935,7 @@ setTimeout(spawnFish, 3000);
 // ---------------------------------------------------------------- main loop
 drawTown(); // static scene fills the window
 window.addEventListener("resize", reflow); // edge-to-edge reflow on resize
+setInterval(drawTown, 60_000); // refresh sky as the local time of day changes
 
 app.ticker.add((time) => {
   const dt = time.deltaTime;
