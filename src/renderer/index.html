@@ -82,6 +82,28 @@
       #panel input[type="range"] {
         flex: 1;
       }
+      #panel input[type="text"] {
+        flex: 1;
+        min-width: 0;
+        padding: 4px 6px;
+        border: 1px solid #c4ccba;
+        border-radius: 6px;
+        font: inherit;
+        font-size: 12px;
+      }
+      #panel button.mini {
+        padding: 4px 9px;
+        border: none;
+        border-radius: 6px;
+        background: #8fb96b;
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #panel button.mini:hover {
+        background: #7da75c;
+      }
       #panel .hint {
         margin-top: 8px;
         font-size: 11px;
@@ -106,7 +128,12 @@
       </div>
       <label class="row"><input type="checkbox" data-toggle="fish" checked /> 🐟 River fish</label>
       <label class="row"><input type="checkbox" data-toggle="clouds" checked /> ☁️ Clouds</label>
-      <div class="hint">Too busy? Trim the herd here.</div>
+      <h3 style="margin-top: 12px">🌦️ Weather</h3>
+      <div class="row">
+        <input id="city" type="text" placeholder="Your city" />
+        <button id="cityGo" class="mini">Set</button>
+      </div>
+      <div id="weatherLabel" class="hint">Weather: off (enter a city)</div>
     </div>
     <div id="app"></div>
     <script type="module" src="./renderer.js"></script>

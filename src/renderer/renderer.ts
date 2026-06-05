@@ -88,6 +88,111 @@ const skyLayer = new Container(); // birds
 // scene fills the real window edge-to-edge; layout reflows on resize
 app.stage.addChild(bgStatic, cloudLayer, fishLayer, pathLayer, groundAnimalLayer, structStatic, houseWallLayer, agentLayer, roofLayer, skyLayer);
 
+// ---------------------------------------------------------------- weather (Open-Meteo, keyless)
+const weatherLayer = new Container(); // foreground rain/snow + dim overlay
+const weatherOverlay = new Graphics();
+const weatherFx = new Graphics();
+weatherLayer.addChild(weatherOverlay, weatherFx);
+app.stage.addChild(weatherLayer);
+
+type WeatherKind = "clear" | "clouds" | "rain" | "snow" | "fog" | "thunder";
+let weatherKind: WeatherKind = "clear";
+let rainDrops: { x: number; y: number; v: number; len: number }[] = [];
+let snowFlakes: { x: number; y: number; v: number; sway: number; ph: number; r: number }[] = [];
+let flashTimer = 0;
+
+function setWeather(kind: WeatherKind) {
+  weatherKind = kind;
+  rainDrops = [];
+  snowFlakes = [];
+  flashTimer = 0;
+  const W = app.screen.width;
+  const H = app.screen.height;
+  if (kind === "rain" || kind === "thunder") {
+    for (let i = 0; i < 150; i++) rainDrops.push({ x: Math.random() * W, y: Math.random() * H, v: 9 + Math.random() * 6, len: 8 + Math.random() * 8 });
+  } else if (kind === "snow") {
+    for (let i = 0; i < 90; i++) snowFlakes.push({ x: Math.random() * W, y: Math.random() * H, v: 0.6 + Math.random() * 0.9, sway: 0.3 + Math.random() * 0.6, ph: Math.random() * 6, r: 1.5 + Math.random() * 2 });
+  }
+  weatherOverlay.clear();
+  if (kind === "clouds") weatherOverlay.rect(0, 0, W, H).fill(0x3a4150, 0.1);
+  else if (kind === "rain" || kind === "thunder") weatherOverlay.rect(0, 0, W, H).fill(0x303743, 0.22);
+  else if (kind === "fog") weatherOverlay.rect(0, 0, W, H).fill(0xdfe6ec, 0.34);
+}
+
+function stepWeather(dt: number) {
+  const W = app.screen.width;
+  const H = app.screen.height;
+  weatherFx.clear();
+  if (weatherKind === "rain" || weatherKind === "thunder") {
+    for (const d of rainDrops) {
+      d.y += d.v * dt;
+      d.x += d.v * 0.25 * dt;
+      if (d.y > H) {
+        d.y = -10;
+        d.x = Math.random() * W;
+      }
+      weatherFx.moveTo(d.x, d.y).lineTo(d.x - d.len * 0.25, d.y + d.len);
+    }
+    weatherFx.stroke({ width: 1.3, color: 0xbcd4e6, alpha: 0.7 });
+    if (weatherKind === "thunder") {
+      flashTimer -= dt;
+      if (flashTimer <= 0 && Math.random() < 0.008) flashTimer = 6;
+      if (flashTimer > 0) weatherFx.rect(0, 0, W, H).fill(0xffffff, 0.25);
+    }
+  } else if (weatherKind === "snow") {
+    for (const f of snowFlakes) {
+      f.ph += dt * 0.05;
+      f.y += f.v * dt;
+      f.x += Math.sin(f.ph) * f.sway * dt;
+      if (f.y > H) {
+        f.y = -6;
+        f.x = Math.random() * W;
+      }
+      weatherFx.circle(f.x, f.y, f.r).fill(0xffffff, 0.9);
+    }
+  }
+}
+
+function codeToWeather(code: number): WeatherKind {
+  if (code === 0) return "clear";
+  if (code <= 3) return "clouds";
+  if (code === 45 || code === 48) return "fog";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "snow";
+  if (code >= 95) return "thunder";
+  if (code >= 51) return "rain";
+  return "clear";
+}
+const WX_TEXT: Record<WeatherKind, string> = {
+  clear: "Clear ☀️",
+  clouds: "Cloudy ☁️",
+  rain: "Rain 🌧️",
+  snow: "Snow ❄️",
+  fog: "Fog 🌫️",
+  thunder: "Storm ⛈️",
+};
+
+async function applyCity(city: string) {
+  const label = document.getElementById("weatherLabel")!;
+  label.textContent = "Weather: loading…";
+  try {
+    const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en`).then((r) => r.json());
+    if (!geo.results?.length) {
+      label.textContent = `Weather: "${city}" not found`;
+      return;
+    }
+    const g = geo.results[0];
+    const wx = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${g.latitude}&longitude=${g.longitude}&current=weather_code,temperature_2m`).then((r) => r.json());
+    const code = wx.current?.weather_code ?? 0;
+    const temp = Math.round(wx.current?.temperature_2m ?? 0);
+    const kind = codeToWeather(code);
+    setWeather(kind);
+    label.textContent = `${g.name}: ${WX_TEXT[kind]} ${temp}°C`;
+    localStorage.setItem("agentville.city", city);
+  } catch {
+    label.textContent = "Weather: fetch failed (offline?)";
+  }
+}
+
 // ---------------------------------------------------------------- static town
 function fruitTree(x: number, groundY: number, fruit: number) {
   const t = new Graphics();
@@ -156,8 +261,9 @@ function drawSky(W: number): Graphics {
 }
 
 function drawTown() {
-  bgStatic.removeChildren();
-  structStatic.removeChildren();
+  // destroy (not just detach) so 60s sky refresh + resizes don't leak GPU geometry
+  for (const c of bgStatic.removeChildren()) c.destroy({ children: true });
+  for (const c of structStatic.removeChildren()) c.destroy({ children: true });
   L = computeLayout();
   const W = app.screen.width;
   const H = app.screen.height;
@@ -190,26 +296,28 @@ function drawTown() {
   for (let x = 70; x < W - 60; x += 46) road.rect(x, L.roadY - 2, 22, 4).fill(0xead9b8);
   bgStatic.addChild(road);
 
-  // town square — where agents gather to work, each at their own craft
-  const sq = new Graphics();
+  // town square — the cobble FLOOR is ground (animals walk on it); the fountain
+  // is a structure (animals pass behind it).
   const { x: fx, y: fy } = L.factory;
-  sq.ellipse(fx, fy + 26, 128, 86).fill(0xd8c7a2).stroke({ width: 4, color: 0xbfa97f }); // cobble plaza
-  // cobble texture dots
+  const floor = new Graphics();
+  floor.ellipse(fx, fy + 26, 128, 86).fill(0xd8c7a2).stroke({ width: 4, color: 0xbfa97f }); // cobble plaza
   for (let i = 0; i < 26; i++) {
     const ang = (i / 26) * Math.PI * 2;
-    sq.circle(fx + Math.cos(ang) * (40 + (i % 4) * 18), fy + 26 + Math.sin(ang) * (28 + (i % 3) * 12), 2).fill(0xc7b48c);
+    floor.circle(fx + Math.cos(ang) * (40 + (i % 4) * 18), fy + 26 + Math.sin(ang) * (28 + (i % 3) * 12), 2).fill(0xc7b48c);
   }
-  // central fountain
-  sq.circle(fx, fy + 6, 30).fill(0x9fb7c9).stroke({ width: 4, color: 0x7a8fa3 }); // pool
-  sq.circle(fx, fy + 6, 30).fill(0x8fb6d6, 0.5);
-  sq.rect(fx - 4, fy - 18, 8, 24).fill(0x8a93a0); // column
-  sq.circle(fx, fy - 20, 8).fill(0x9fb7c9).stroke({ width: 2, color: 0x7a8fa3 }); // top basin
-  sq.circle(fx - 6, fy - 12, 2).circle(fx + 6, fy - 12, 2).circle(fx, fy - 24, 2).fill(0xbfe3ff); // water
-  structStatic.addChild(sq);
-  const fl = new Text({ text: "TOWN SQUARE", style: { fontFamily: "Segoe UI", fontSize: 12, fontWeight: "800", fill: 0x6a5230 } });
-  fl.anchor.set(0.5);
-  fl.position.set(fx, fy + 96);
-  structStatic.addChild(fl);
+  const fll = new Text({ text: "TOWN SQUARE", style: { fontFamily: "Segoe UI", fontSize: 12, fontWeight: "800", fill: 0x6a5230 } });
+  fll.anchor.set(0.5);
+  fll.position.set(fx, fy + 96);
+  floor.addChild(fll);
+  bgStatic.addChild(floor); // ground plane → animals render above it
+
+  const fountain = new Graphics();
+  fountain.circle(fx, fy + 6, 30).fill(0x9fb7c9).stroke({ width: 4, color: 0x7a8fa3 }); // pool
+  fountain.circle(fx, fy + 6, 30).fill(0x8fb6d6, 0.5);
+  fountain.rect(fx - 4, fy - 18, 8, 24).fill(0x8a93a0); // column
+  fountain.circle(fx, fy - 20, 8).fill(0x9fb7c9).stroke({ width: 2, color: 0x7a8fa3 }); // top basin
+  fountain.circle(fx - 6, fy - 12, 2).circle(fx + 6, fy - 12, 2).circle(fx, fy - 24, 2).fill(0xbfe3ff); // water
+  structStatic.addChild(fountain); // structure → animals pass behind it
 
   // fruit trees scattered in the meadow (apple / plum / orange)
   const treeY = H - 150;
@@ -679,6 +787,7 @@ function reflow() {
     if (house) placeHouse(house, pos.x, pos.y);
     sp.setHome(pos.x, pos.y + (sp.kind === "main" ? 34 : 28));
   }
+  setWeather(weatherKind); // resize overlay + repopulate particles to new window size
   retarget();
 }
 
@@ -805,10 +914,19 @@ class Animal extends Container {
     this.scale.x = d >= 0 ? 1 : -1;
   }
 
+  // ground critters skirt the front of the fountain — never trudge through the water
+  private avoidFountain() {
+    const fx = L.factory.x;
+    const fpy = L.factory.y + 6;
+    if (Math.abs(this.x - fx) < 46 && this.y > fpy - 42 && this.y < fpy + 34) this.y = fpy + 36;
+  }
+
   step(dt: number): boolean {
     if (this.kind === "bird") {
       this.flap += dt * 0.3;
       this.y = this.baseY + Math.sin(this.flap) * 4; // gentle bobbing flight
+    } else {
+      this.avoidFountain();
     }
     if (this.mode === "toGraze" && this.grazeAt) {
       const dx = this.grazeAt.x - this.x;
@@ -955,6 +1073,7 @@ app.ticker.add((time) => {
       fishes.splice(i, 1);
     }
   }
+  stepWeather(dt);
   reap(performance.now());
 });
 
@@ -986,6 +1105,26 @@ maxEl.addEventListener("input", () => {
     a.destroy({ children: true });
   }
 });
+
+const cityInput = document.getElementById("city") as HTMLInputElement;
+const cityGo = document.getElementById("cityGo")!;
+const submitCity = () => {
+  const v = cityInput.value.trim();
+  if (v) void applyCity(v);
+};
+cityGo.addEventListener("click", submitCity);
+cityInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitCity();
+});
+const savedCity = localStorage.getItem("agentville.city");
+if (savedCity) {
+  cityInput.value = savedCity;
+  void applyCity(savedCity);
+}
+setInterval(() => {
+  const v = cityInput.value.trim();
+  if (v) void applyCity(v); // keep current weather fresh
+}, 15 * 60 * 1000);
 
 window.agentville.onSessionInfo((info) => {
   hud.textContent = info ? `Agentville 🏘️ — ${info.projectDir}` : "Agentville 🏘️ — no active session";
