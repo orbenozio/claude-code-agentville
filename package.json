@@ -1,0 +1,26 @@
+{
+  "name": "agentville",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Top-down desktop visualization of what Claude Code agents are doing right now",
+  "scripts": {
+    "spike": "tsx src/spike/index.ts",
+    "spike:replay": "tsx src/spike/index.ts --replay",
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/build.mjs && node scripts/launch.mjs"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "pixi.js": "^8.6.6",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "electron": "^33.2.1",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

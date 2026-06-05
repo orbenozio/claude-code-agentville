@@ -1,6 +1,10 @@
 ﻿# Claude / Agents hub — machine-specific junctions, not part of the project
 .claude/
 
+# Node / build
+node_modules/
+dist/
+
 # OS / editor
 Thumbs.db
 .DS_Store

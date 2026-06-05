@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agentville 🏘️</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #7ec850;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      #hud {
+        position: fixed;
+        top: 8px;
+        left: 12px;
+        color: #1b3a1b;
+        font-size: 12px;
+        font-weight: 600;
+        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
+        pointer-events: none;
+        z-index: 10;
+      }
+      #app {
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">Agentville 🏘️ — connecting…</div>
+    <div id="app"></div>
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>
