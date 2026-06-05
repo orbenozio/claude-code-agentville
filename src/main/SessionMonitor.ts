@@ -49,10 +49,15 @@ export class SessionMonitor {
   private async readCwd(file: string): Promise<void> {
     try {
       const fh = await fs.open(file, "r");
-      const buf = Buffer.alloc(8192);
-      const { bytesRead } = await fh.read(buf, 0, 8192, 0);
-      await fh.close();
-      for (const line of buf.toString("utf8", 0, bytesRead).split("\n")) {
+      let chunk: string;
+      try {
+        const buf = Buffer.alloc(8192);
+        const { bytesRead } = await fh.read(buf, 0, 8192, 0);
+        chunk = buf.toString("utf8", 0, bytesRead);
+      } finally {
+        await fh.close();
+      }
+      for (const line of chunk.split("\n")) {
         if (!line.trim()) continue;
         try {
           const o = JSON.parse(line) as { cwd?: string };
@@ -61,7 +66,7 @@ export class SessionMonitor {
             return;
           }
         } catch {
-          /* partial/última line */
+          /* partial last line */
         }
       }
     } catch {

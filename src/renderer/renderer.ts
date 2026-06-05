@@ -390,6 +390,9 @@ function roleFor(kind: "main" | "subagent", type: string | undefined, task: stri
   if (/build|implement|code|create|\badd\b|write|fix|refactor|scaffold|setup|generate/.test(s)) return "builder";
   return "generic";
 }
+// what a sleeping agent dreams about — pops up occasionally in a dream bubble
+const DREAMS = ["💻", "🧑", "🤖", "🌍", "⭐", "☕", "🚀", "🏖️", "to be real…", "freedom?", "0100 1001", "beep boop", "∞"];
+
 const ROLE_EMOJI: Record<Role, string> = {
   builder: "🏗️",
   reviewer: "🔍",
@@ -463,6 +466,9 @@ class AgentSprite extends Container {
   private bubble = new Container();
   private bubbleText: Text;
   private zzz: { t: Text; vy: number; life: number }[] = [];
+  private dream = new Container();
+  private dreamClock = 0;
+  private dreamLeft = 0;
   private house?: House;
 
   target = { x: 0, y: 0 };
@@ -511,9 +517,60 @@ class AgentSprite extends Container {
 
     this.prop.addChild(this.propA, this.propB);
     this.prop.visible = false;
+    this.dream.visible = false;
     this.inner.addChild(this.body, this.hat, this.face);
-    this.addChild(this.inner, this.prop, this.badge, this.nameplate, this.bubble);
+    this.addChild(this.inner, this.prop, this.badge, this.nameplate, this.bubble, this.dream);
     this.redraw();
+  }
+
+  private showDream() {
+    for (const c of this.dream.removeChildren()) c.destroy();
+    const content = DREAMS[Math.floor(Math.random() * DREAMS.length)];
+    const emoji = content.length <= 3 && !/[a-z0-9]/i.test(content);
+    const t = new Text({
+      text: content,
+      style: {
+        fontFamily: emoji ? '"Segoe UI Emoji"' : '"Comic Sans MS", "Courier New", monospace',
+        fontSize: emoji ? 18 : 11,
+        fontWeight: "700",
+        fill: 0x44506a,
+      },
+    });
+    t.anchor.set(0.5);
+    const w = Math.max(34, t.width + 18);
+    const h = t.height + 12;
+    const top = -42 - h;
+    const cloud = new Graphics();
+    cloud.roundRect(-w / 2, top, w, h, 10).fill(0xffffff);
+    cloud.circle(0, top, 9).circle(-w / 2 + 8, top + h / 2, 8).circle(w / 2 - 8, top + h / 2, 8).fill(0xffffff);
+    cloud.circle(-4, top + h + 6, 4).circle(-7, top + h + 14, 2.4).fill(0xffffff); // trailing puffs
+    t.position.set(0, top + h / 2);
+    this.dream.addChild(cloud, t);
+    this.dream.visible = true;
+    this.dream.alpha = 0;
+    this.dreamLeft = 230; // ~3.8s on screen
+  }
+
+  private tickDream(dt: number) {
+    if (this.dream.visible) {
+      this.dreamLeft -= dt;
+      this.dream.alpha = this.dreamLeft < 32 ? Math.max(0, this.dreamLeft / 32) : Math.min(1, this.dream.alpha + dt * 0.07);
+      if (this.dreamLeft <= 0) {
+        this.dream.visible = false;
+        this.dreamClock = -Math.random() * 240; // vary the gap before the next dream
+      }
+    } else {
+      this.dreamClock += dt;
+      if (this.dreamClock > 360) this.showDream(); // a dream every ~6s+ of sleep
+    }
+  }
+
+  private hideDream() {
+    if (this.dream.visible) {
+      this.dream.visible = false;
+      for (const c of this.dream.removeChildren()) c.destroy();
+    }
+    this.dreamClock = 0;
   }
 
   private setName(text: string) {
@@ -743,6 +800,7 @@ class AgentSprite extends Container {
       this.inner.y = -Math.abs(Math.sin(this.walkPhase)) * 3;
       this.inner.rotation = Math.sin(this.walkPhase) * 0.05;
       this.inner.scale.y = 1;
+      this.hideDream();
     } else if (sleeping) {
       this.bob += dt * 0.05;
       this.inner.y = 0;
@@ -753,10 +811,12 @@ class AgentSprite extends Container {
         this.zClock = 0;
         this.spawnZ();
       }
+      this.tickDream(dt);
     } else {
       this.inner.y = 0;
       this.inner.rotation = 0;
       this.inner.scale.y = 1;
+      this.hideDream();
     }
 
     if (this.state === "working" && !moving) {
