@@ -82,7 +82,8 @@
       #panel input[type="range"] {
         flex: 1;
       }
-      #panel input[type="text"] {
+      #panel input[type="text"],
+      #panel select {
         flex: 1;
         min-width: 0;
         padding: 4px 6px;
@@ -90,6 +91,7 @@
         border-radius: 6px;
         font: inherit;
         font-size: 12px;
+        background: #fff;
       }
       #panel button.mini {
         padding: 4px 9px;
@@ -128,12 +130,23 @@
       </div>
       <label class="row"><input type="checkbox" data-toggle="fish" checked /> 🐟 River fish</label>
       <label class="row"><input type="checkbox" data-toggle="clouds" checked /> ☁️ Clouds</label>
-      <h3 style="margin-top: 12px">🌦️ Weather</h3>
+      <h3 style="margin-top: 12px">🌦️ Weather &amp; time</h3>
+      <div class="row">
+        <select id="wxMode">
+          <option value="auto">Auto (by city)</option>
+          <option value="clear">☀️ Clear</option>
+          <option value="clouds">☁️ Cloudy</option>
+          <option value="rain">🌧️ Rain</option>
+          <option value="snow">❄️ Snow</option>
+          <option value="fog">🌫️ Fog</option>
+          <option value="thunder">⛈️ Storm</option>
+        </select>
+      </div>
       <div class="row">
         <input id="city" type="text" placeholder="Your city" />
         <button id="cityGo" class="mini">Set</button>
       </div>
-      <div id="weatherLabel" class="hint">Weather: off (enter a city)</div>
+      <div id="weatherLabel" class="hint">Weather: off (pick a mode or enter a city)</div>
     </div>
     <div id="app"></div>
     <script type="module" src="./renderer.js"></script>

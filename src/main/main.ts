@@ -39,6 +39,27 @@ function createWindow(): void {
 
 ipcMain.handle("get-snapshot", () => monitor?.getSnapshot() ?? []);
 
+// weather via the main process (no CORS issues) — Open-Meteo, keyless
+ipcMain.handle("get-weather", async (_e, city: string) => {
+  try {
+    const geo = (await fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en`,
+    ).then((r) => r.json())) as { results?: { name: string; latitude: number; longitude: number }[] };
+    if (!geo.results?.length) return { error: "not_found" as const };
+    const g = geo.results[0];
+    const wx = (await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${g.latitude}&longitude=${g.longitude}&current=weather_code,temperature_2m`,
+    ).then((r) => r.json())) as { current?: { weather_code: number; temperature_2m: number } };
+    const code = wx.current?.weather_code ?? 0;
+    const temp = Math.round(wx.current?.temperature_2m ?? 0);
+    console.log(`[weather] ${g.name}: code=${code} temp=${temp}°C`);
+    return { name: g.name, code, temp };
+  } catch (e) {
+    console.log("[weather] fetch failed:", (e as Error).message);
+    return { error: "fetch_failed" as const };
+  }
+});
+
 app.whenReady().then(createWindow);
 
 app.on("window-all-closed", () => {

@@ -7,10 +7,12 @@ interface SessionInfo {
   projectDir: string;
   sessionId: string;
 }
+type WeatherResult = { name: string; code: number; temp: number } | { error: "not_found" | "fetch_failed" };
 interface AgentvilleApi {
   onAgentDiff(cb: (changes: StateChange[]) => void): void;
   onSessionInfo(cb: (info: SessionInfo | null) => void): void;
   getSnapshot(): Promise<AgentState[]>;
+  getWeather(city: string): Promise<WeatherResult>;
 }
 declare global {
   interface Window {
@@ -42,32 +44,34 @@ document.getElementById("app")!.appendChild(app.canvas);
 
 
 // ---------------------------------------------------------------- layout
+// the town square sits in the CENTRE; houses ring it; the mayor's hall is at its head (top).
 interface Layout {
   skyH: number;
   riverY: number;
-  homeY: number;
-  homeStartX: number;
-  homeGapX: number;
-  mayor: { x: number; y: number };
-  roadY: number;
-  factory: { x: number; y: number };
-  factoryFloor: { x: number; y: number; w: number; h: number };
+  sq: { cx: number; cy: number; rx: number; ry: number }; // central square ellipse
+  mayor: { x: number; y: number }; // town hall, at the head (top) of the square
+  ringRx: number; // radius of the house ring around the square
+  ringRy: number;
+  workFloor: { x: number; y: number; w: number; h: number }; // where agents mill while working
 }
 function computeLayout(): Layout {
   const W = app.screen.width;
   const H = app.screen.height;
-  const roadY = H - 120;
-  const factory = { x: W - 150, y: roadY - 70 };
+  const skyH = 100;
+  const riverY = 140;
+  const cx = W / 2;
+  const topUsable = riverY + 86;
+  const cy = (topUsable + H) / 2 + 4;
+  const rx = Math.max(190, Math.min(W * 0.27, 340)); // big, scales with width
+  const ry = rx * 0.6;
   return {
-    skyH: 100,
-    riverY: 140,
-    homeY: 232,
-    homeStartX: 250,
-    homeGapX: 150,
-    mayor: { x: 110, y: 242 },
-    roadY,
-    factory,
-    factoryFloor: { x: factory.x - 104, y: factory.y + 24, w: 208, h: 58 }, // lower plaza, around the fountain
+    skyH,
+    riverY,
+    sq: { cx, cy, rx, ry },
+    mayor: { x: cx, y: cy - ry - 50 },
+    ringRx: rx + 78,
+    ringRy: ry + 66,
+    workFloor: { x: cx - rx * 0.55, y: cy + ry * 0.18, w: rx * 1.1, h: ry * 0.55 },
   };
 }
 let L = computeLayout();
@@ -89,11 +93,35 @@ const skyLayer = new Container(); // birds
 app.stage.addChild(bgStatic, cloudLayer, fishLayer, pathLayer, groundAnimalLayer, structStatic, houseWallLayer, agentLayer, roofLayer, skyLayer);
 
 // ---------------------------------------------------------------- weather (Open-Meteo, keyless)
-const weatherLayer = new Container(); // foreground rain/snow + dim overlay
-const weatherOverlay = new Graphics();
-const weatherFx = new Graphics();
-weatherLayer.addChild(weatherOverlay, weatherFx);
+const weatherLayer = new Container(); // foreground: ambient tint + dim overlay + rain/snow
+const ambientTint = new Graphics(); // time-of-day tint over the whole village
+const weatherOverlay = new Graphics(); // weather dimming over the whole village
+const weatherFx = new Graphics(); // rain/snow particles
+weatherLayer.addChild(ambientTint, weatherOverlay, weatherFx);
 app.stage.addChild(weatherLayer);
+
+// tint the whole scene by local time of day (so the VILLAGE reflects it, not just the sky)
+function updateAmbient() {
+  const W = app.screen.width;
+  const H = app.screen.height;
+  const h = new Date().getHours() + new Date().getMinutes() / 60;
+  let color = 0x000000;
+  let alpha = 0;
+  if (h < 5.5 || h >= 20) {
+    color = 0x0a1430;
+    alpha = 0.42;
+  } // night
+  else if (h < 7) {
+    color = 0xff8a4d;
+    alpha = 0.16;
+  } // dawn
+  else if (h >= 18.5) {
+    color = 0xff6a3c;
+    alpha = 0.2;
+  } // dusk
+  ambientTint.clear();
+  if (alpha > 0) ambientTint.rect(0, 0, W, H).fill(color, alpha);
+}
 
 type WeatherKind = "clear" | "clouds" | "rain" | "snow" | "fog" | "thunder";
 let weatherKind: WeatherKind = "clear";
@@ -174,23 +202,15 @@ const WX_TEXT: Record<WeatherKind, string> = {
 async function applyCity(city: string) {
   const label = document.getElementById("weatherLabel")!;
   label.textContent = "Weather: loading…";
-  try {
-    const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en`).then((r) => r.json());
-    if (!geo.results?.length) {
-      label.textContent = `Weather: "${city}" not found`;
-      return;
-    }
-    const g = geo.results[0];
-    const wx = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${g.latitude}&longitude=${g.longitude}&current=weather_code,temperature_2m`).then((r) => r.json());
-    const code = wx.current?.weather_code ?? 0;
-    const temp = Math.round(wx.current?.temperature_2m ?? 0);
-    const kind = codeToWeather(code);
-    setWeather(kind);
-    label.textContent = `${g.name}: ${WX_TEXT[kind]} ${temp}°C`;
-    localStorage.setItem("agentville.city", city);
-  } catch {
-    label.textContent = "Weather: fetch failed (offline?)";
+  const res = await window.agentville.getWeather(city);
+  if ("error" in res) {
+    label.textContent = res.error === "not_found" ? `Weather: "${city}" not found` : "Weather: fetch failed (offline?)";
+    return;
   }
+  const kind = codeToWeather(res.code);
+  setWeather(kind);
+  label.textContent = `${res.name}: ${WX_TEXT[kind]} ${res.temp}°C`;
+  localStorage.setItem("agentville.city", city);
 }
 
 // ---------------------------------------------------------------- static town
@@ -273,57 +293,58 @@ function drawTown() {
 
   // winding river just under the sky
   const river = new Graphics();
-  const ry = L.riverY;
-  river.moveTo(0, ry - 16);
-  for (let x = 0; x <= W; x += 60) river.quadraticCurveTo(x + 30, ry - 16 + (x % 120 ? 10 : -10), x + 60, ry - 16);
-  river.lineTo(W, ry + 18);
-  for (let x = W; x >= 0; x -= 60) river.quadraticCurveTo(x - 30, ry + 18 + (x % 120 ? -8 : 10), x - 60, ry + 18);
+  const rvy = L.riverY;
+  river.moveTo(0, rvy - 16);
+  for (let x = 0; x <= W; x += 60) river.quadraticCurveTo(x + 30, rvy - 16 + (x % 120 ? 10 : -10), x + 60, rvy - 16);
+  river.lineTo(W, rvy + 18);
+  for (let x = W; x >= 0; x -= 60) river.quadraticCurveTo(x - 30, rvy + 18 + (x % 120 ? -8 : 10), x - 60, rvy + 18);
   river.closePath().fill(0x4aa3df);
-  for (let x = 20; x < W; x += 70) river.ellipse(x, ry, 10, 2.2).fill(0x8fd0f2); // ripples
+  for (let x = 20; x < W; x += 70) river.ellipse(x, rvy, 10, 2.2).fill(0x8fd0f2); // ripples
   bgStatic.addChild(river);
 
-  // scattered flowers on the meadow (below the river)
+  // scattered flowers on the meadow (below the river, outside the square)
+  const { cx, cy, rx, ry } = L.sq;
   const flowers = new Graphics();
-  for (let i = 0; i < 36; i++) {
+  for (let i = 0; i < 44; i++) {
     const x = (i * 137.5) % W;
-    const y = L.riverY + 60 + ((i * 89.3) % (H - L.riverY - 160));
+    const y = L.riverY + 50 + ((i * 89.3) % (H - L.riverY - 120));
+    if ((x - cx) ** 2 / ((rx + 30) ** 2) + (y - cy) ** 2 / ((ry + 30) ** 2) < 1) continue; // not on the square
     flowers.circle(x, y, 2.5).fill([0xffffff, 0xfff066, 0xff9ff3][i % 3]);
   }
   bgStatic.addChild(flowers);
 
-  const road = new Graphics();
-  road.roundRect(40, L.roadY - 16, W - 80, 32, 16).fill(0xcaa472).stroke({ width: 2, color: 0xb08e5e });
-  for (let x = 70; x < W - 60; x += 46) road.rect(x, L.roadY - 2, 22, 4).fill(0xead9b8);
-  bgStatic.addChild(road);
-
-  // town square — the cobble FLOOR is ground (animals walk on it); the fountain
-  // is a structure (animals pass behind it).
-  const { x: fx, y: fy } = L.factory;
+  // BIG central town square — cobble FLOOR is ground (agents stand on it); fountain is a structure
   const floor = new Graphics();
-  floor.ellipse(fx, fy + 26, 128, 86).fill(0xd8c7a2).stroke({ width: 4, color: 0xbfa97f }); // cobble plaza
-  for (let i = 0; i < 26; i++) {
-    const ang = (i / 26) * Math.PI * 2;
-    floor.circle(fx + Math.cos(ang) * (40 + (i % 4) * 18), fy + 26 + Math.sin(ang) * (28 + (i % 3) * 12), 2).fill(0xc7b48c);
+  floor.ellipse(cx, cy, rx, ry).fill(0xd8c7a2).stroke({ width: 5, color: 0xbfa97f });
+  floor.ellipse(cx, cy, rx - 10, ry - 10).stroke({ width: 2, color: 0xcdba91 });
+  for (let i = 0; i < 60; i++) {
+    const a = (i / 60) * Math.PI * 2;
+    const rr = 0.45 + (i % 5) * 0.11;
+    floor.circle(cx + Math.cos(a) * rx * rr, cy + Math.sin(a) * ry * rr, 2).fill(0xc7b48c);
   }
-  const fll = new Text({ text: "TOWN SQUARE", style: { fontFamily: "Segoe UI", fontSize: 12, fontWeight: "800", fill: 0x6a5230 } });
+  const fll = new Text({ text: "TOWN SQUARE", style: { fontFamily: "Segoe UI", fontSize: 13, fontWeight: "800", fill: 0x6a5230 } });
   fll.anchor.set(0.5);
-  fll.position.set(fx, fy + 96);
+  fll.position.set(cx, cy + ry - 14);
   floor.addChild(fll);
-  bgStatic.addChild(floor); // ground plane → animals render above it
+  bgStatic.addChild(floor);
 
+  // grand central fountain (scales with the square)
+  const fr = Math.min(46, ry * 0.42);
   const fountain = new Graphics();
-  fountain.circle(fx, fy + 6, 30).fill(0x9fb7c9).stroke({ width: 4, color: 0x7a8fa3 }); // pool
-  fountain.circle(fx, fy + 6, 30).fill(0x8fb6d6, 0.5);
-  fountain.rect(fx - 4, fy - 18, 8, 24).fill(0x8a93a0); // column
-  fountain.circle(fx, fy - 20, 8).fill(0x9fb7c9).stroke({ width: 2, color: 0x7a8fa3 }); // top basin
-  fountain.circle(fx - 6, fy - 12, 2).circle(fx + 6, fy - 12, 2).circle(fx, fy - 24, 2).fill(0xbfe3ff); // water
-  structStatic.addChild(fountain); // structure → animals pass behind it
+  fountain.ellipse(cx, cy, fr + 6, (fr + 6) * 0.6).fill(0x86a0b5); // basin rim
+  fountain.ellipse(cx, cy, fr, fr * 0.6).fill(0x9fc1dd); // pool
+  fountain.ellipse(cx, cy, fr, fr * 0.6).fill(0x8fb6d6, 0.5);
+  fountain.rect(cx - 5, cy - 34, 10, 36).fill(0x8a93a0); // column
+  fountain.circle(cx, cy - 36, 10).fill(0x9fc1dd).stroke({ width: 2, color: 0x7a8fa3 }); // top basin
+  fountain.circle(cx - 7, cy - 26, 2).circle(cx + 7, cy - 26, 2).circle(cx, cy - 42, 2.2).fill(0xbfe3ff); // water
+  structStatic.addChild(fountain);
 
-  // fruit trees scattered in the meadow (apple / plum / orange)
-  const treeY = H - 150;
-  structStatic.addChild(fruitTree(150, treeY, 0xe63946)); // apple
-  structStatic.addChild(fruitTree(W - 320, treeY, 0xb5179e)); // plum
-  structStatic.addChild(fruitTree(W * 0.5, treeY + 24, 0xff8c1a)); // orange
+  // fruit trees in the outer corners (apple / plum / orange)
+  structStatic.addChild(fruitTree(70, L.riverY + 110, 0xe63946));
+  structStatic.addChild(fruitTree(W - 70, L.riverY + 96, 0xb5179e));
+  structStatic.addChild(fruitTree(60, H - 70, 0xff8c1a));
+
+  updateAmbient(); // refresh the time-of-day tint over the whole village
 }
 
 function colorForSlot(slot: number): number {
@@ -389,13 +410,17 @@ function buildHouse(color: number, isMayor: boolean): House {
   return { path, walls, roof, h };
 }
 
-// position a house at (x,y) and draw its path down to the current road
+// position a house at (x,y) and draw a path radiating inward to the square
 function placeHouse(house: House, x: number, y: number) {
   house.walls.position.set(x, y);
   house.roof.position.set(x, y);
+  // path is a strip from the house toward the square centre
+  const ang = Math.atan2(L.sq.cy - y, L.sq.cx - x);
+  const dist = Math.hypot(L.sq.cx - x, L.sq.cy - y);
+  const len = Math.max(0, dist - L.sq.rx * 0.92);
   house.path.position.set(x, y);
-  const len = Math.max(0, L.roadY - (y + house.h / 2) + 10);
-  house.path.clear().roundRect(-9, house.h / 2 - 6, 18, len, 9).fill(0xcaa472);
+  house.path.rotation = ang;
+  house.path.clear().roundRect(house.h / 2 - 4, -8, len, 16, 8).fill(0xcaa472).stroke({ width: 1, color: 0xb08e5e });
 }
 
 // ---------------------------------------------------------------- agent sprite
@@ -711,7 +736,7 @@ class AgentSprite extends Container {
       this.wanderClock += dt;
       if (!this.wanderTarget || this.wanderClock > 140) {
         this.wanderClock = 0;
-        const z = L.factoryFloor;
+        const z = L.workFloor;
         this.wanderTarget = { x: z.x + Math.random() * z.w, y: z.y + Math.random() * z.h };
       }
     } else if (this.state !== "working") {
@@ -751,9 +776,12 @@ let nextHomeSlot = 0;
 const freeSlots: number[] = [];
 const allocSlot = () => (freeSlots.length ? freeSlots.shift()! : nextHomeSlot++);
 
-// anchor (house center) for a sprite, in current layout coords
+// anchor (house center) for a sprite: mayor at the head, subagents ringed around the square
 function houseAnchor(sp: AgentSprite): { x: number; y: number } {
-  return sp.kind === "main" ? L.mayor : { x: L.homeStartX + sp.slot * L.homeGapX, y: L.homeY };
+  if (sp.kind === "main") return L.mayor;
+  // distribute around the ring, leaving the top (where the mayor sits) clear
+  const ang = (-90 + 42 + sp.slot * 46) * (Math.PI / 180);
+  return { x: L.sq.cx + Math.cos(ang) * L.ringRx, y: L.sq.cy + Math.sin(ang) * L.ringRy };
 }
 
 function ensureSprite(s: { agentId: string; kind: "main" | "subagent"; type?: string }): AgentSprite {
@@ -797,8 +825,8 @@ function retarget() {
     (s) => s.state === "working" || s.state === "error" || s.state === "rateLimited",
   );
   atFactory.forEach((s, i) => {
-    const z = L.factoryFloor;
-    s.target = { x: z.x + 20 + (i % 3) * 50, y: z.y + 20 + Math.floor(i / 3) * 40 };
+    const z = L.workFloor;
+    s.target = { x: z.x + 24 + (i % 4) * (z.w / 4), y: z.y + 12 + Math.floor(i / 4) * 34 };
   });
   for (const s of sprites.values()) {
     if (s.state === "idle" || s.state === "done") s.target = { x: s.home.x, y: s.home.y };
@@ -901,11 +929,11 @@ class Animal extends Container {
     this.vx = dir * this.speed;
     this.face(dir);
 
-    // ground animals sometimes stop to graze/peck together in the meadow
+    // ground animals sometimes stop to graze/peck together in the outer meadow
     if (kind !== "bird" && Math.random() < 0.6) {
       this.mode = "toGraze";
-      const gx = 150 + Math.random() * 260; // gather toward the left meadow
-      const gy = app.screen.height - 185 + Math.random() * 30;
+      const gx = 60 + Math.random() * 150; // bottom-left grass, clear of the central square
+      const gy = app.screen.height - 55 + Math.random() * 30;
       this.grazeAt = { x: gx, y: gy };
     }
   }
@@ -914,11 +942,17 @@ class Animal extends Container {
     this.scale.x = d >= 0 ? 1 : -1;
   }
 
-  // ground critters skirt the front of the fountain — never trudge through the water
-  private avoidFountain() {
-    const fx = L.factory.x;
-    const fpy = L.factory.y + 6;
-    if (Math.abs(this.x - fx) < 46 && this.y > fpy - 42 && this.y < fpy + 34) this.y = fpy + 36;
+  // ground critters never set foot on the square — they're pushed just outside its rim
+  private avoidSquare() {
+    const { cx, cy, rx, ry } = L.sq;
+    const mx = rx + 18, my = ry + 16; // keep-out ellipse (square + margin)
+    const nx = (this.x - cx) / mx;
+    const ny = (this.y - cy) / my;
+    const d = Math.hypot(nx, ny);
+    if (d < 1 && d > 0.0001) {
+      this.x = cx + (nx / d) * mx;
+      this.y = cy + (ny / d) * my;
+    }
   }
 
   step(dt: number): boolean {
@@ -926,7 +960,7 @@ class Animal extends Container {
       this.flap += dt * 0.3;
       this.y = this.baseY + Math.sin(this.flap) * 4; // gentle bobbing flight
     } else {
-      this.avoidFountain();
+      this.avoidSquare();
     }
     if (this.mode === "toGraze" && this.grazeAt) {
       const dx = this.grazeAt.x - this.x;
@@ -977,7 +1011,7 @@ function spawnAnimal() {
   else kind = ground[Math.floor(Math.random() * ground.length)];
 
   const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
-  const y = kind === "bird" ? 40 + Math.random() * 80 : app.screen.height - 185 - Math.random() * 35;
+  const y = kind === "bird" ? 40 + Math.random() * 80 : app.screen.height - 40 - Math.random() * 55;
   const a = new Animal(kind, y, dir);
   a.x = dir === 1 ? -50 : app.screen.width + 50;
   (kind === "bird" ? skyLayer : groundAnimalLayer).addChild(a);
@@ -1108,22 +1142,41 @@ maxEl.addEventListener("input", () => {
 
 const cityInput = document.getElementById("city") as HTMLInputElement;
 const cityGo = document.getElementById("cityGo")!;
-const submitCity = () => {
+const wxMode = document.getElementById("wxMode") as HTMLSelectElement;
+const wxLabel = document.getElementById("weatherLabel")!;
+
+const refreshAuto = () => {
   const v = cityInput.value.trim();
   if (v) void applyCity(v);
+  else wxLabel.textContent = "Weather: enter a city for auto mode";
+};
+const onModeChange = () => {
+  const m = wxMode.value;
+  if (m === "auto") {
+    refreshAuto();
+  } else {
+    setWeather(m as WeatherKind); // manual override — see any effect on demand
+    wxLabel.textContent = `Manual: ${WX_TEXT[m as WeatherKind]}`;
+  }
+};
+wxMode.addEventListener("change", onModeChange);
+
+const submitCity = () => {
+  wxMode.value = "auto";
+  refreshAuto();
 };
 cityGo.addEventListener("click", submitCity);
 cityInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") submitCity();
 });
+
 const savedCity = localStorage.getItem("agentville.city");
 if (savedCity) {
   cityInput.value = savedCity;
-  void applyCity(savedCity);
+  refreshAuto();
 }
 setInterval(() => {
-  const v = cityInput.value.trim();
-  if (v) void applyCity(v); // keep current weather fresh
+  if (wxMode.value === "auto") refreshAuto(); // keep current weather fresh
 }, 15 * 60 * 1000);
 
 window.agentville.onSessionInfo((info) => {
