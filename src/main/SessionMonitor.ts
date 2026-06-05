@@ -27,11 +27,46 @@ export class SessionMonitor {
   private watchers: FSWatcher[] = [];
   private tickTimer?: NodeJS.Timeout;
   private session?: SessionInfo;
+  private cwdPath?: string;
 
   constructor(private readonly onChanges: (changes: StateChange[]) => void) {}
 
   get currentSession(): SessionInfo | undefined {
     return this.session;
+  }
+
+  /** real working directory of the watched session (from the JSONL), if known */
+  get cwd(): string | undefined {
+    return this.cwdPath;
+  }
+
+  /** clean project name to show instead of the full encoded path */
+  get projectName(): string | undefined {
+    if (this.cwdPath) return path.basename(this.cwdPath);
+    return this.session?.projectDir.split("-").filter(Boolean).pop();
+  }
+
+  private async readCwd(file: string): Promise<void> {
+    try {
+      const fh = await fs.open(file, "r");
+      const buf = Buffer.alloc(8192);
+      const { bytesRead } = await fh.read(buf, 0, 8192, 0);
+      await fh.close();
+      for (const line of buf.toString("utf8", 0, bytesRead).split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          const o = JSON.parse(line) as { cwd?: string };
+          if (o.cwd) {
+            this.cwdPath = o.cwd;
+            return;
+          }
+        } catch {
+          /* partial/última line */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   getSnapshot(): AgentState[] {
@@ -42,6 +77,7 @@ export class SessionMonitor {
     const session = await hottestSession(projectFilter);
     if (!session) return undefined;
     this.session = session;
+    await this.readCwd(session.mainFile);
 
     this.addReader(session.mainFile, undefined, true);
 

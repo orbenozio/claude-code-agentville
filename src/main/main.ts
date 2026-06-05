@@ -33,7 +33,7 @@ function createWindow(): void {
   // start monitoring once the renderer is ready to receive
   win.webContents.once("did-finish-load", async () => {
     const session = await monitor!.start();
-    win?.webContents.send("session-info", session ? { projectDir: session.projectDir, sessionId: session.sessionId } : null);
+    win?.webContents.send("session-info", session ? { projectName: monitor!.projectName ?? "project", sessionId: session.sessionId } : null);
   });
 }
 

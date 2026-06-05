@@ -4,7 +4,7 @@ import type { StateChange } from "../core/Reducer.js";
 
 // ---- bridge typing (exposed by preload) ----
 interface SessionInfo {
-  projectDir: string;
+  projectName: string;
   sessionId: string;
 }
 type WeatherResult = { name: string; code: number; temp: number } | { error: "not_found" | "fetch_failed" };
@@ -37,6 +37,11 @@ const MAYOR_COLOR = 0xffd23f;
 const HARDHAT_COLOR = 0xff7b00;
 
 const hud = document.getElementById("hud")!;
+let townName = localStorage.getItem("agentville.town") || "Agentville";
+let projectName = "";
+function updateHud() {
+  hud.textContent = projectName ? `🏘️ ${townName}  ·  watching ${projectName}` : `🏘️ ${townName}`;
+}
 
 const app = new Application();
 await app.init({ resizeTo: window, background: 0x7ec850, antialias: true });
@@ -280,6 +285,25 @@ function drawSky(W: number): Graphics {
   return g;
 }
 
+// a carved wooden welcome sign showing the town's name
+function townSign(cx: number, y: number, name: string): Container {
+  const c = new Container();
+  const t = new Text({
+    text: name,
+    style: { fontFamily: 'Georgia, "Times New Roman", serif', fontSize: 22, fontWeight: "700", fill: 0xfff1cf, dropShadow: { color: 0x3a2410, blur: 0, distance: 1, alpha: 0.6 } },
+  });
+  t.anchor.set(0.5);
+  const w = Math.max(130, t.width + 48);
+  const g = new Graphics();
+  g.rect(-w / 2 + 16, 10, 8, 40).fill(0x6b4423).rect(w / 2 - 24, 10, 8, 40).fill(0x6b4423); // posts
+  g.roundRect(-w / 2, -26, w, 52, 7).fill(0x9c6b3f).stroke({ width: 3, color: 0x5e3a22 }); // board
+  g.roundRect(-w / 2 + 6, -20, w - 12, 40, 5).stroke({ width: 1.5, color: 0x7a5230 }); // inner frame
+  g.circle(-w / 2 + 12, -20, 2).circle(w / 2 - 12, -20, 2).circle(-w / 2 + 12, 20, 2).circle(w / 2 - 12, 20, 2).fill(0x4a2d18); // bolts
+  c.addChild(g, t);
+  c.position.set(cx, y);
+  return c;
+}
+
 function drawTown() {
   // destroy (not just detach) so 60s sky refresh + resizes don't leak GPU geometry
   for (const c of bgStatic.removeChildren()) c.destroy({ children: true });
@@ -343,6 +367,9 @@ function drawTown() {
   structStatic.addChild(fruitTree(70, L.riverY + 110, 0xe63946));
   structStatic.addChild(fruitTree(W - 70, L.riverY + 96, 0xb5179e));
   structStatic.addChild(fruitTree(60, H - 70, 0xff8c1a));
+
+  // welcome sign at the bottom entrance to town
+  structStatic.addChild(townSign(W / 2, H - 56, townName));
 
   updateAmbient(); // refresh the time-of-day tint over the whole village
 }
@@ -1140,6 +1167,22 @@ maxEl.addEventListener("input", () => {
   }
 });
 
+const townInput = document.getElementById("townName") as HTMLInputElement;
+const townGo = document.getElementById("townGo")!;
+townInput.value = townName;
+updateHud();
+const setTown = () => {
+  const v = townInput.value.trim();
+  townName = v || "Agentville";
+  localStorage.setItem("agentville.town", townName);
+  updateHud();
+  drawTown(); // redraw the welcome sign with the new name
+};
+townGo.addEventListener("click", setTown);
+townInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") setTown();
+});
+
 const cityInput = document.getElementById("city") as HTMLInputElement;
 const cityGo = document.getElementById("cityGo")!;
 const wxMode = document.getElementById("wxMode") as HTMLSelectElement;
@@ -1180,7 +1223,8 @@ setInterval(() => {
 }, 15 * 60 * 1000);
 
 window.agentville.onSessionInfo((info) => {
-  hud.textContent = info ? `Agentville 🏘️ — ${info.projectDir}` : "Agentville 🏘️ — no active session";
+  projectName = info?.projectName ?? "";
+  updateHud();
 });
 window.agentville.onAgentDiff((changes) => {
   for (const c of changes) applyChange(c);

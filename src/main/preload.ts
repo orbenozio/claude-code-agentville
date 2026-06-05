@@ -3,7 +3,7 @@ import type { AgentState } from "../core/types.js";
 import type { StateChange } from "../core/Reducer.js";
 
 export interface SessionInfo {
-  projectDir: string;
+  projectName: string;
   sessionId: string;
 }
 
