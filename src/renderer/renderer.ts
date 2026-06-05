@@ -152,10 +152,12 @@ function updateAmbient() {
 // six lampposts around the square; their head sits ~46px above the base point
 function lampPositions(): { x: number; y: number }[] {
   const { cx, cy, rx, ry } = L.sq;
+  // offset 0 → lamps sit at the sides, leaving clear gaps at the top (town hall)
+  // and bottom (welcome sign) so none overlaps them
   const pts: { x: number; y: number }[] = [];
   const n = 6;
   for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + Math.PI / 6;
+    const a = (i / n) * Math.PI * 2;
     pts.push({ x: cx + Math.cos(a) * (rx + 32), y: cy + Math.sin(a) * (ry + 26) });
   }
   return pts;
