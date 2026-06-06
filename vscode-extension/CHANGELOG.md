@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.2
+
+- The town now renders **inside a VSCode webview tab** (self-contained — no external
+  app, no path to configure, cross-platform). The core reads Claude's local session
+  files and streams updates to the view.
+- **Village tabs**: signposts switch between the other Claude conversations of the same
+  project, each a colour-coded village with an optional manual name; the town-hall roof
+  and HUD show the current village's colour.
+- **Entrance animation**: cloud curtains part to reveal the town.
+- Visual polish: thought/dream bubbles render above roofs; dream timing is randomised
+  per agent; agent houses are distributed on the left/right of the square (centre top
+  kept for the town hall, centre bottom for the welcome sign); flowers are a stable
+  random scatter.
+- Robustness: switching villages can no longer leak the previous village's agents;
+  guards for a sandboxed webview (CSP-safe Pixi init, safe localStorage).
+
 ## 0.1.1
 
 - Fix an infinite "Reload Window" notification loop that occurred when both

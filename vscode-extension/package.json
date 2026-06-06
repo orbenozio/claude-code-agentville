@@ -5,6 +5,14 @@
   "version": "0.1.2",
   "publisher": "OrBenozio",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/orbenozio/claude-code-agentville.git"
+  },
+  "homepage": "https://github.com/orbenozio/claude-code-agentville#readme",
+  "bugs": {
+    "url": "https://github.com/orbenozio/claude-code-agentville/issues"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

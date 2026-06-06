@@ -1,49 +1,59 @@
-# Agentville Launcher (VSCode extension)
+# Agentville 🏘️
 
-Adds a 🌍 globe button that opens the **Agentville** desktop app — both:
+A live, top-down **town view of your Claude Code agents** — right inside a VSCode tab.
+Every agent becomes a little character with a house around the town square; the main
+session is the **mayor** in the town hall, and each sub-agent is a villager whose role
+(builder / reviewer / architect / researcher) shows in what they carry. Watch them
+work, finish (✅), sleep and dream 💭 — with day/night and live weather over the village.
 
-- **In the Claude Code panel footer** (the nice UX), docked into a shared
-  `#orb-tools` toolbar div so future tools can stack beside it; and
-- **In the VSCode status bar** (`$(globe) Agentville`) — the *guaranteed* launch
-  path, since the panel button's deep link can be blocked on some VSCode builds.
+## Opening it
+
+Three ways, all open the town in a VSCode tab:
+
+- 🌍 the **globe button in the Claude Code panel** footer
+- 🌍 the **status-bar item** (`Agentville`)
+- the **command palette** → **“Agentville: Open the town view”**
+
+No setup, no separate app to install — it runs entirely inside VSCode.
+
+## Features
+
+- **A character per agent**, placed around the central square; the main session is the
+  mayor in the town hall.
+- **Village tabs** — signposts on the sides hop between the other Claude conversations
+  of the **same project** (each its own “village”), colour-coded, with an optional
+  manual name you can set per chat.
+- **Day/night + weather** — the village reflects the local time of day, and real
+  weather for a city you choose (keyless, via Open-Meteo).
+- **Cute life** — farm animals, birds, a flowing river with jumping fish, fruit trees,
+  street lamps that light up in the evening.
 
 ## How it works
 
-It mirrors the proven **Claude Code Nonstop** mechanism and coexists with it:
+Agentville reads Claude Code’s **local session files** (`~/.claude/projects/…`,
+read-only) to know which agents are active, and renders the town in a VSCode webview.
+The 🌍 button is added to Claude’s panel by patching Claude Code’s `webview/index.js`
+with a **marker-scoped** block that coexists safely with other tools (e.g. Claude Code
+Nonstop) — it only ever touches text between its own markers, re-injects after Claude
+updates, and on removal strips only its own block.
 
-1. On activation it patches Claude Code's `webview/index.js` with a
-   **marker-scoped** block (`// >>> Agentville Launcher (injected) … >>>`). Only
-   text between *its own* markers is ever touched, so it never clobbers Nonstop's
-   block (and vice-versa). Idempotent, re-injects on window focus and after Claude
-   updates. An emergency `.agentville-backup` is kept; removal **strips only our
-   markers** (never blind-restores).
-2. The injected script adds the globe button. Clicking it fires a synthesized
-   `<a>` click to `vscode://orbenozio.agentville-launcher/open`.
-3. The extension's `UriHandler` (and the `agentville.open` command behind the
-   status-bar item) launches the Electron app: it resolves `electron` from the
-   app's own `node_modules`, clears `ELECTRON_RUN_AS_NODE`, and spawns
-   `dist/main.cjs` detached. The app's single-instance lock focuses an existing
-   window instead of opening a second town.
-
-## Setup
-
-1. Build the Agentville app once: `npm run build` in the repo (produces
-   `dist/main.cjs`).
-2. Set **`agentville.appPath`** to the repo's absolute path. If you have the repo
-   open as a workspace folder, it's auto-detected — no setting needed.
-3. Reload the VSCode window. The extension injects the button and offers a second
-   reload so the Claude panel picks it up.
+It reads only; it never modifies your conversations or sends them anywhere.
 
 ## Commands
 
-- **Agentville: Open the town view** — launch the app (same as the buttons).
-- **Agentville: Add button to Claude panel (inject)** — force a re-inject.
-- **Agentville: Remove button from Claude panel** — strip our injection (restores
-  Claude's file by removing only our markers).
+- **Agentville: Open the town view** — open (or focus) the town tab.
+- **Agentville: Add button to Claude panel (inject)** — re-add the 🌍 button.
+- **Agentville: Remove button from Claude panel** — remove the injection (restores
+  Claude’s file by stripping only our markers).
 
-## Install (dev)
+## Settings
 
-Copy this folder to `~/.vscode/extensions/orbenozio.agentville-launcher-<version>/`
-and reload the window. No build step / no dependencies (pure VSCode + Node API).
+- **`agentville.autoInject`** — add the button on startup / after Claude updates (default on).
+- **`agentville.reinjectCheckHours`** — how often to re-check the injection (default 6).
 
-Run the logic tests: `node test/injector.test.js`.
+## Install (dev / from VSIX)
+
+Install the packaged `.vsix` via **Extensions → … → Install from VSIX**, or copy this
+folder to `~/.vscode/extensions/orbenozio.agentville-launcher-<version>/`, then reload
+the window. The webview bundle is built by `vscode:prepublish` (esbuild); the host has
+no runtime dependencies.
