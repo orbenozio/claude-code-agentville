@@ -90,15 +90,43 @@ function hasValidInjection(content, version) {
 }
 
 /**
- * Produce the new file content with a single fresh Agentville block appended.
- * Strips any/all existing Agentville blocks first (idempotent + de-dupe), and
- * leaves all non-Agentville content (e.g. Nonstop's injection) untouched.
+ * Produce the new file content carrying a single fresh Agentville block.
+ *
+ * Injection is IN-PLACE. If we have no block yet we append one at the end (with a
+ * separating blank line). If we already have a block we replace the FIRST one
+ * *where it sits* — same byte offsets — and drop any duplicate blocks, without
+ * reordering anything and without trimming global whitespace. This is critical
+ * when another extension (e.g. Nonstop) also injects into the same file: if both
+ * injectors appended-to-end, each would shove its block past the other on every
+ * reload, so both files would read as "changed" forever and both would keep
+ * offering "Reload Window". With in-place replacement, re-injecting an already
+ * up-to-date block is a byte-for-byte no-op (next === content), which is what
+ * stops the reload loop. We never touch text outside our own markers.
  */
 function inject(content, version, scriptBody) {
-  const clean = stripAllBlocks(content);
-  const trimmed = clean.replace(/\s+$/, '');
+  const blocks = findBlocks(content);
   const block = buildBlock(version, scriptBody);
-  return `${trimmed}\n\n${block}\n`;
+
+  if (blocks.length === 0) {
+    // First injection: append at the end with a single separating blank line.
+    const trimmed = content.replace(/\s+$/, '');
+    return `${trimmed}\n\n${block}\n`;
+  }
+
+  let out = content;
+  // Remove duplicate blocks (everything past the first), back-to-front so the
+  // earlier offsets we still need stay valid. Mirrors stripAllBlocks' single
+  // surrounding-newline cleanup. These all sit after the primary block, so the
+  // primary block's offsets below remain correct.
+  for (let i = blocks.length - 1; i >= 1; i--) {
+    let { start: s, end: e } = blocks[i];
+    if (out[e] === '\n') e += 1;
+    if (out[s - 1] === '\n') s -= 1;
+    out = out.slice(0, s) + out.slice(e);
+  }
+  // Replace the primary (first) block in place — same start/end, no reordering.
+  const primary = blocks[0];
+  return out.slice(0, primary.start) + block + out.slice(primary.end);
 }
 
 module.exports = {

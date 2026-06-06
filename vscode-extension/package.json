@@ -1,8 +1,8 @@
 {
   "name": "agentville-launcher",
   "displayName": "Agentville Launcher",
-  "description": "Adds a 🌍 globe button to the Claude Code panel (and the status bar) that opens the Agentville desktop app — a live top-down town view of your Claude agents.",
-  "version": "0.0.1",
+  "description": "A live top-down town view of your Claude Code agents — opens in a VSCode tab, with a 🌍 button in the Claude panel and status bar.",
+  "version": "0.1.1",
   "publisher": "OrBenozio",
   "license": "MIT",
   "engines": {
@@ -39,13 +39,8 @@
       }
     ],
     "configuration": {
-      "title": "Agentville Launcher",
+      "title": "Agentville",
       "properties": {
-        "agentville.appPath": {
-          "type": "string",
-          "default": "",
-          "description": "Absolute path to the Agentville repo (the folder containing dist/main.cjs and node_modules/electron). Required so the launcher can start the app."
-        },
         "agentville.autoInject": {
           "type": "boolean",
           "default": true,
@@ -60,5 +55,12 @@
         }
       }
     }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "vscode:prepublish": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2"
   }
 }
