@@ -570,6 +570,15 @@ function townSign(cx: number, y: number, name: string): Container {
   return c;
 }
 
+// meadow flowers: a fixed random scatter, generated ONCE, stored as window fractions
+// so it stays put (and stays random-looking) across resizes instead of being derived
+// from the window width.
+const FLOWERS = Array.from({ length: 64 }, () => ({
+  fx: Math.random(),
+  fy: Math.random(),
+  color: [0xffffff, 0xfff066, 0xff9ff3][Math.floor(Math.random() * 3)],
+}));
+
 function drawTown() {
   // destroy (not just detach) so 60s sky refresh + resizes don't leak GPU geometry
   for (const c of bgStatic.removeChildren()) c.destroy({ children: true });
@@ -592,14 +601,19 @@ function drawTown() {
   for (let x = 20; x < W; x += 70) river.ellipse(x, rvy, 10, 2.2).fill(0x8fd0f2); // ripples
   bgStatic.addChild(river);
 
-  // scattered flowers on the meadow (below the river, outside the square)
+  // scattered flowers on the meadow (below the river, outside the square). Positions
+  // are FIXED fractions (FLOWERS, generated once) scaled to the window — a genuinely
+  // random scatter that stays put on resize, instead of a width-derived `i % W` pattern
+  // that shifted and lined up into visible rows.
   const { cx, cy, rx, ry } = L.sq;
   const flowers = new Graphics();
-  for (let i = 0; i < 44; i++) {
-    const x = (i * 137.5) % W;
-    const y = L.riverY + 50 + ((i * 89.3) % (H - L.riverY - 120));
+  const meadowTop = L.riverY + 50;
+  const meadowH = Math.max(40, H - L.riverY - 120);
+  for (const f of FLOWERS) {
+    const x = f.fx * W;
+    const y = meadowTop + f.fy * meadowH;
     if ((x - cx) ** 2 / ((rx + 30) ** 2) + (y - cy) ** 2 / ((ry + 30) ** 2) < 1) continue; // not on the square
-    flowers.circle(x, y, 2.5).fill([0xffffff, 0xfff066, 0xff9ff3][i % 3]);
+    flowers.circle(x, y, 2.5).fill(f.color);
   }
   bgStatic.addChild(flowers);
 
