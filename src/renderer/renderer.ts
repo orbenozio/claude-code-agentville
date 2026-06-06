@@ -1,8 +1,3 @@
-// Installs Pixi's eval-free shader system. A strict VSCode-webview CSP forbids
-// 'unsafe-eval', and Pixi v8's default WebGL renderer builds shaders via new Function()
-// — without this it throws "Current environment does not allow unsafe-eval". Must run
-// before app.init(). Harmless in Electron (full Chromium) too, so one source fits both.
-import "pixi.js/unsafe-eval";
 import { Application, Container, Graphics, Rectangle, Text } from "pixi.js";
 import type { AgentState, AgentVisualState } from "../core/types.js";
 import type { StateChange } from "../core/Reducer.js";

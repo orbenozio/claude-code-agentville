@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Load Pixi from a CDN (import map) instead of bundling it, so the extension can be
+  published to the VS Marketplace (the bundled Pixi tripped the content scan). The
+  town view now needs network access to load the renderer.
+
 ## 0.1.3
 
 - Add an extension icon.
