@@ -34,10 +34,6 @@ await Promise.all([
     platform: "browser",
     target: "chrome120",
     format: "esm",
-    // Pixi is NOT bundled — it's loaded from a CDN via an import map in index.html.
-    // Bundling Pixi tripped the VS Marketplace malware scan (new Function + data: blobs);
-    // keeping it out of the vsix is what lets the extension publish.
-    external: ["pixi.js"],
     sourcemap: true,
     logLevel: "info",
   }),

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+- Bundle Pixi again (offline-capable, no network needed for the town). Distributed via
+  VSIX / GitHub releases. (The VS Marketplace content scan rejects this extension either
+  way — bundled Pixi trips the code-pattern scan, and loading Pixi from a CDN trips the
+  remote-code rule — so it isn't published there.)
+
 ## 0.1.4
 
 - Load Pixi from a CDN (import map) instead of bundling it, so the extension can be

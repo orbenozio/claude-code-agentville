@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; img-src ${cspSource} data: blob:; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; script-src 'nonce-${nonce}' 'unsafe-eval' https://cdn.jsdelivr.net; connect-src 'none';"
+      content="default-src 'none'; img-src ${cspSource} data: blob:; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';"
     />
     <title>Agentville 🏘️</title>
     <style>
@@ -173,10 +173,6 @@
     </div>
     <div id="app"></div>
     <script nonce="${nonce}" src="${shimUri}"></script>
-    <!-- Pixi loaded from CDN (kept out of the vsix so the Marketplace scan passes) -->
-    <script type="importmap" nonce="${nonce}">
-      { "imports": { "pixi.js": "https://cdn.jsdelivr.net/npm/pixi.js@8.19.0/dist/pixi.min.mjs" } }
-    </script>
     <script type="module" nonce="${nonce}" src="${rendererUri}"></script>
   </body>
 </html>

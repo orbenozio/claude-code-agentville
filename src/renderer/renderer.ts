@@ -1,3 +1,7 @@
+// Pixi is bundled (offline-capable). Its WebGL renderer uses new Function() for
+// shaders, which the strict webview CSP forbids — this eval-free module replaces that.
+// Must run before app.init(). Harmless in Electron (full Chromium) too.
+import "pixi.js/unsafe-eval";
 import { Application, Container, Graphics, Rectangle, Text } from "pixi.js";
 import type { AgentState, AgentVisualState } from "../core/types.js";
 import type { StateChange } from "../core/Reducer.js";
