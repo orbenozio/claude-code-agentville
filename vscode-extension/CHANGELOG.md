@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Add an extension icon.
+
 ## 0.1.2
 
 - The town now renders **inside a VSCode webview tab** (self-contained — no external
