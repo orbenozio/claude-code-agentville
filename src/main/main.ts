@@ -60,7 +60,21 @@ ipcMain.handle("get-weather", async (_e, city: string) => {
   }
 });
 
-app.whenReady().then(createWindow);
+// Single instance: when the launcher button is clicked while the app is already
+// open, focus the existing window instead of spawning a second town.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+  });
+  app.whenReady().then(createWindow);
+}
 
 app.on("window-all-closed", () => {
   monitor?.stop();

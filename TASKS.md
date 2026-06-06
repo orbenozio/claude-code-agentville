@@ -54,3 +54,4 @@
 - [x] QA (סוכן-משנה 🔍) + תיקוני דליפות: destroy בבועות-חלום, try/finally ל-fd ב-readCwd
 - [x] פנסי רחוב סביב הכיכר שנדלקים מהערב (זוהר additive מעל ה-tint); השלט מואר ע"י 3 ספוטים מלמטה (קרני-אור), לא כתם מרכזי
 - [x] בורר "שעת-יום" בהגדרות (Auto/Dawn/Day/Dusk/Night) לתצוגה מקדימה של שמיים/אווירה/אורות
+- [x] **כפתור-שיגור מתוך פאנל קלוד** (`vscode-extension/`): תוסף VSCode שמזריק כפתור 🌍 ל-footer של פאנל קלוד (בתוך DIV משותף `#orb-tools`) + פריט סטטוס-בר, שפותח את אפליקציית Agentville. מנגנון ההזרקה הוא port תואם-דו-קיום של NONSTOP (markers נפרדים, idempotent, focus-reinject); גשר השיגור: לחיצת-`<a>` ל-`vscode://…/open` → UriHandler → spawn (electron נפתר מ-appPath, ניקוי `ELECTRON_RUN_AS_NODE`, detached) + נעילת single-instance באפליקציה. תוכנן→נבדק(architect)→מומש→נבדק(code-review)→הותקן. טסט: `node vscode-extension/test/injector.test.js`

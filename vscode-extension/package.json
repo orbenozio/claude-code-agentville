@@ -1,0 +1,64 @@
+{
+  "name": "agentville-launcher",
+  "displayName": "Agentville Launcher",
+  "description": "Adds a 🌍 globe button to the Claude Code panel (and the status bar) that opens the Agentville desktop app — a live top-down town view of your Claude agents.",
+  "version": "0.0.1",
+  "publisher": "OrBenozio",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "agentville",
+    "visualization"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onUri",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentville.open",
+        "title": "Agentville: Open the town view"
+      },
+      {
+        "command": "agentville.checkAndInject",
+        "title": "Agentville: Add button to Claude panel (inject)"
+      },
+      {
+        "command": "agentville.removeInjection",
+        "title": "Agentville: Remove button from Claude panel"
+      }
+    ],
+    "configuration": {
+      "title": "Agentville Launcher",
+      "properties": {
+        "agentville.appPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the Agentville repo (the folder containing dist/main.cjs and node_modules/electron). Required so the launcher can start the app."
+        },
+        "agentville.autoInject": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically add the Agentville button to the Claude Code panel on startup and re-add it after Claude updates."
+        },
+        "agentville.reinjectCheckHours": {
+          "type": "number",
+          "default": 6,
+          "minimum": 0,
+          "maximum": 48,
+          "description": "How often (hours) to re-check/re-add the button after Claude Code updates (0 = disabled)."
+        }
+      }
+    }
+  }
+}
