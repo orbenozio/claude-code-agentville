@@ -2,7 +2,7 @@
   "name": "agentville-launcher",
   "displayName": "Agentville Launcher",
   "description": "A live top-down town view of your Claude Code agents — opens in a VSCode tab, with a 🌍 button in the Claude panel and status bar.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "OrBenozio",
   "license": "MIT",
   "engines": {

@@ -8,6 +8,9 @@ import { TailReader } from "../core/TailReader.js";
 import type { AgentState } from "../core/types.js";
 import { hottestSession, type SessionInfo } from "../spike/discovery.js";
 
+// re-export so the bundled monitor.cjs exposes session enumeration to the panel host
+export { discoverSessions, siblingSessions, sessionTitle, type SessionInfo } from "../spike/discovery.js";
+
 const AGENT_FILE_RE = /agent-([a-z0-9]+)\.jsonl$/i;
 // at startup, ignore subagent files that finished long ago — only resurrect
 // recently-active ones, so the town isn't flooded with the whole session history.
@@ -28,6 +31,8 @@ export class SessionMonitor {
   private tickTimer?: NodeJS.Timeout;
   private session?: SessionInfo;
   private cwdPath?: string;
+  private stopped = false; // once stopped, never emit again (prevents an in-flight pump
+  // from a switched-away session leaking its agents into the newly-opened village)
 
   constructor(private readonly onChanges: (changes: StateChange[]) => void) {}
 
@@ -78,8 +83,13 @@ export class SessionMonitor {
     return this.reducer.snapshot();
   }
 
-  async start(projectFilter?: string): Promise<SessionInfo | undefined> {
-    const session = await hottestSession(projectFilter);
+  async start(pinnedOrFilter?: SessionInfo | string): Promise<SessionInfo | undefined> {
+    // pin a specific session (object) for session-switching, or pick the hottest
+    // (optionally filtered by a project-dir substring).
+    const session =
+      pinnedOrFilter && typeof pinnedOrFilter === "object"
+        ? pinnedOrFilter
+        : await hottestSession(typeof pinnedOrFilter === "string" ? pinnedOrFilter : undefined);
     if (!session) return undefined;
     this.session = session;
     await this.readCwd(session.mainFile);
@@ -128,6 +138,7 @@ export class SessionMonitor {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const w of this.watchers) void w.close();
     this.watchers = [];
     if (this.tickTimer) clearInterval(this.tickTimer);
@@ -139,7 +150,7 @@ export class SessionMonitor {
   }
 
   private async pump(): Promise<void> {
-    if (!this.session) return;
+    if (this.stopped || !this.session) return;
     const all: StateChange[] = [];
     // channel A — JSONL tail (main session + subagent files)
     for (const { reader, agentId } of this.readers.values()) {
@@ -160,6 +171,7 @@ export class SessionMonitor {
   }
 
   private emit(changes: StateChange[]): void {
-    if (changes.length > 0) this.onChanges(changes);
+    if (this.stopped || changes.length === 0) return;
+    this.onChanges(changes);
   }
 }

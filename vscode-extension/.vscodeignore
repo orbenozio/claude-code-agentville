@@ -1,0 +1,15 @@
+# Source maps — never shipped to users (large, and flagged by the Marketplace scan).
+**/*.map
+
+# Build inputs / tooling not needed at runtime.
+scripts/**
+src/renderer/**
+node_modules/**
+
+# Tests and dev artifacts.
+test/**
+*.vsix
+
+# Repo noise.
+.gitignore
+.vscode/**

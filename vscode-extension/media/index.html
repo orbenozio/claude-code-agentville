@@ -3,6 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src ${cspSource} data: blob:; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; script-src 'nonce-${nonce}'; connect-src 'none';"
+    />
     <title>Agentville 🏘️</title>
     <style>
       html,
@@ -168,6 +172,7 @@
       <div id="weatherLabel" class="hint">Weather: off (pick a mode or enter a city)</div>
     </div>
     <div id="app"></div>
-    <script type="module" src="./renderer.js"></script>
+    <script nonce="${nonce}" src="${shimUri}"></script>
+    <script type="module" nonce="${nonce}" src="${rendererUri}"></script>
   </body>
 </html>

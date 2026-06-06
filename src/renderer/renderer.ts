@@ -1,4 +1,9 @@
-import { Application, Container, Graphics, Text } from "pixi.js";
+// Installs Pixi's eval-free shader system. A strict VSCode-webview CSP forbids
+// 'unsafe-eval', and Pixi v8's default WebGL renderer builds shaders via new Function()
+// — without this it throws "Current environment does not allow unsafe-eval". Must run
+// before app.init(). Harmless in Electron (full Chromium) too, so one source fits both.
+import "pixi.js/unsafe-eval";
+import { Application, Container, Graphics, Rectangle, Text } from "pixi.js";
 import type { AgentState, AgentVisualState } from "../core/types.js";
 import type { StateChange } from "../core/Reducer.js";
 
@@ -6,19 +11,43 @@ import type { StateChange } from "../core/Reducer.js";
 interface SessionInfo {
   projectName: string;
   sessionId: string;
+  title?: string;
 }
 type WeatherResult = { name: string; code: number; temp: number } | { error: "not_found" | "fetch_failed" };
+type Neighbor = { sessionId: string; title: string } | null;
+type Neighbors = { left: Neighbor; right: Neighbor };
 interface AgentvilleApi {
   onAgentDiff(cb: (changes: StateChange[]) => void): void;
   onSessionInfo(cb: (info: SessionInfo | null) => void): void;
+  onNeighbors(cb: (n: Neighbors) => void): void;
   getSnapshot(): Promise<AgentState[]>;
   getWeather(city: string): Promise<WeatherResult>;
+  switchSession(sessionId: string): Promise<boolean>;
 }
 declare global {
   interface Window {
     agentville: AgentvilleApi;
   }
 }
+
+// localStorage can throw (SecurityError) in a sandboxed VSCode webview; a top-level
+// throw here would abort module evaluation and leave a blank panel. Wrap it.
+const safeLS = {
+  get(key: string): string | null {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: string): void {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      /* ignore — no persistence in this host */
+    }
+  },
+};
 
 const STATE_BADGE: Record<AgentVisualState, string> = {
   idle: "",
@@ -56,15 +85,57 @@ function localHour(): number {
   }
 }
 
-let townName = localStorage.getItem("agentville.town") || "Agentville";
+let townName = safeLS.get("agentville.town") || "Agentville";
 let projectName = "";
+let currentSessionId = "";
+let currentTitle = "";
+
+// deterministic per-conversation hue, so each "village" gets a clear, stable colour
+function villageHue(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+function villageCss(id: string): string {
+  return `hsl(${villageHue(id)}, 70%, 45%)`;
+}
+function villageColor(id: string): number {
+  const h = villageHue(id) / 360;
+  const s = 0.62;
+  const l = 0.55;
+  const k = (n: number) => (n + h * 12) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1));
+  const to = (v: number) => Math.round(v * 255);
+  return (to(f(0)) << 16) | (to(f(8)) << 8) | to(f(4));
+}
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
+}
+// town-hall roof colour: the current village's colour (falls back to the mayor colour)
+function villageRoofColor(): number {
+  return currentSessionId ? villageColor(currentSessionId) : MAYOR_COLOR;
+}
+// a manual, user-set name for a village (per session), overriding the auto title
+function villageNameKey(id: string): string {
+  return "agentville.village." + id;
+}
+function manualVillageName(id: string): string {
+  return id ? (safeLS.get(villageNameKey(id)) || "") : "";
+}
 function updateHud() {
-  hud.textContent = projectName ? `🏘️ ${townName}  ·  watching ${projectName}` : `🏘️ ${townName}`;
+  const dotColor = currentSessionId ? villageCss(currentSessionId) : "#6a7a5a";
+  const dot = `<span style="display:inline-block;width:11px;height:11px;border-radius:50%;background:${dotColor};box-shadow:0 0 0 2px rgba(255,255,255,.65);vertical-align:middle;margin-right:6px;"></span>`;
+  const proj = projectName ? `  ·  ${escapeHtml(projectName)}` : "";
+  const name = manualVillageName(currentSessionId) || currentTitle;
+  const chat = name ? `  ·  <span style="opacity:.8">${escapeHtml(name)}</span>` : "";
+  hud.innerHTML = `${dot}🏘️ ${escapeHtml(townName)}${proj}${chat}`;
 }
 
 const app = new Application();
 await app.init({ resizeTo: window, background: 0x7ec850, antialias: true });
 document.getElementById("app")!.appendChild(app.canvas);
+app.stage.eventMode = "static"; // enable hit-testing so the signposts are clickable
 
 
 // ---------------------------------------------------------------- layout
@@ -113,8 +184,9 @@ const houseWallLayer = new Container(); // per-house walls
 const agentLayer = new Container(); // characters
 const roofLayer = new Container(); // house roofs (in front → agent looks "inside")
 const skyLayer = new Container(); // birds
+const bubbleLayer = new Container(); // thought/dream bubbles — ABOVE roofs so they're never hidden
 // scene fills the real window edge-to-edge; layout reflows on resize
-app.stage.addChild(bgStatic, cloudLayer, fishLayer, pathLayer, groundAnimalLayer, structStatic, houseWallLayer, agentLayer, roofLayer, skyLayer);
+app.stage.addChild(bgStatic, cloudLayer, fishLayer, pathLayer, groundAnimalLayer, structStatic, houseWallLayer, agentLayer, roofLayer, skyLayer, bubbleLayer);
 
 // ---------------------------------------------------------------- weather (Open-Meteo, keyless)
 const weatherLayer = new Container(); // foreground: ambient tint + lights + dim overlay + rain/snow
@@ -125,6 +197,142 @@ const weatherOverlay = new Graphics(); // weather dimming over the whole village
 const weatherFx = new Graphics(); // rain/snow particles
 weatherLayer.addChild(ambientTint, streetLights, weatherOverlay, weatherFx);
 app.stage.addChild(weatherLayer);
+
+// ---------------------------------------------------------------- entrance animation
+// One-shot: fluffy clouds cover the whole panel, hold briefly, then part to both
+// sides (easeInOutCubic) and fade, revealing the town. Sits above every layer.
+let entranceLayer: Container | null = null;
+let entranceLeft: Container | null = null;
+let entranceRight: Container | null = null;
+let entranceT = 0;
+let entranceArmed = false; // clouds stay closed until the town is loaded, then part
+let entranceLeftTravel = 0;
+let entranceRightStart = 0;
+let entranceRightTravel = 0;
+const ENTRANCE_HOLD = 16; // frames the clouds stay closed (~0.27s)
+const ENTRANCE_SLIDE = 104; // frames to part (~1.7s @60fps)
+
+function cloudCurtain(cw: number, H: number): Container {
+  const c = new Container();
+  const g = new Graphics();
+  const step = 50;
+  // soft grey underlayer (depth) then opaque white body — opaque so the town is hidden
+  for (const pass of [{ pad: 5, col: 0xdbe4f1 }, { pad: 0, col: 0xffffff }]) {
+    let row = 0;
+    for (let y = -40; y < H + 50; y += step * 0.86, row++) {
+      for (let x = -30 + (row % 2) * 25; x < cw + 30; x += step) {
+        const r = 36 + (((x * 3 + y) | 0) % 16);
+        g.circle(x, y, r + pass.pad);
+      }
+    }
+    g.fill(pass.col);
+  }
+  c.addChild(g);
+  return c;
+}
+
+function buildEntrance(): void {
+  const W = app.screen.width;
+  const H = app.screen.height;
+  const cw = W * 0.6 + 80; // each curtain spans >half so they overlap at center
+  entranceLayer = new Container();
+  entranceLeft = cloudCurtain(cw, H);
+  entranceRight = cloudCurtain(cw, H);
+  entranceLeft.x = 0;
+  entranceRight.x = W - cw + 80; // right edge past the panel; overlaps center
+  entranceLayer.addChild(entranceLeft, entranceRight);
+  app.stage.addChild(entranceLayer);
+  entranceT = 0;
+  entranceArmed = false; // hold closed until armEntrance() (town fully loaded)
+  entranceLeftTravel = cw + 60;
+  entranceRightStart = entranceRight.x;
+  entranceRightTravel = cw + 60;
+}
+
+function stepEntrance(dt: number): void {
+  if (!entranceLayer || !entranceLeft || !entranceRight || !entranceArmed) return;
+  entranceT += dt;
+  const t = entranceT - ENTRANCE_HOLD;
+  if (t <= 0) return; // closed, holding
+  const p = Math.min(1, t / ENTRANCE_SLIDE);
+  const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // easeInOutCubic
+  entranceLeft.x = -e * entranceLeftTravel;
+  entranceRight.x = entranceRightStart + e * entranceRightTravel;
+  entranceLayer.alpha = p < 0.8 ? 1 : Math.max(0, 1 - (p - 0.8) / 0.2);
+  if (p >= 1) {
+    entranceLayer.destroy({ children: true });
+    entranceLayer = entranceLeft = entranceRight = null;
+  }
+}
+
+// ---------------------------------------------------------------- village signposts
+// Two wooden signs at the screen edges to hop to sibling conversations (villages) of
+// the SAME project. Each shows the target chat's title; a click switches the panel.
+const signLayer = new Container();
+app.stage.addChild(signLayer); // above the world; the entrance clouds cover it during the reveal
+
+class Signpost extends Container {
+  private plaque = new Graphics();
+  private arrow: Text;
+  private titleText: Text;
+  sessionId = "";
+  constructor(side: "left" | "right") {
+    super();
+    this.eventMode = "static";
+    this.cursor = "pointer";
+    this.visible = false;
+    this.arrow = new Text({ text: side === "left" ? "◀" : "▶", style: { fontFamily: "Segoe UI", fontSize: 20, fontWeight: "900", fill: 0x6b4423 } });
+    this.titleText = new Text({
+      text: "",
+      style: { fontFamily: "Comic Sans MS", fontSize: 12, fontWeight: "700", fill: 0x3a2a16, align: "center", wordWrap: true, wordWrapWidth: 132 },
+    });
+    this.arrow.anchor.set(0.5);
+    this.titleText.anchor.set(0.5);
+    this.addChild(this.plaque, this.arrow, this.titleText);
+    this.on("pointertap", () => { if (this.sessionId) void window.agentville.switchSession(this.sessionId); });
+    this.on("pointerover", () => this.scale.set(1.06));
+    this.on("pointerout", () => this.scale.set(1));
+  }
+  setNeighbor(n: Neighbor) {
+    if (!n) { this.visible = false; this.sessionId = ""; return; }
+    this.sessionId = n.sessionId;
+    this.titleText.text = manualVillageName(n.sessionId) || n.title || "chat";
+    this.redraw();
+    this.visible = true;
+  }
+  private redraw() {
+    const w = 168;
+    const h = Math.max(72, this.titleText.height + 52);
+    const top = -h / 2;
+    this.plaque.clear();
+    this.plaque.roundRect(-w / 2, top, w, h, 9).fill(0xc9a06a).stroke({ width: 3, color: 0x6b4423 });
+    // village colour band — a clear, stable per-conversation identity
+    if (this.sessionId) this.plaque.roundRect(-w / 2 + 12, top + 10, w - 24, 10, 5).fill(villageColor(this.sessionId));
+    this.plaque.rect(-4, h / 2, 8, 22).fill(0x6b4423); // post under the plaque
+    this.arrow.position.set(0, top + 34);
+    this.titleText.position.set(0, top + 34 + this.titleText.height / 2 + 6);
+    this.hitArea = new Rectangle(-w / 2, top, w, h);
+  }
+}
+
+const leftSign = new Signpost("left");
+const rightSign = new Signpost("right");
+signLayer.addChild(leftSign, rightSign);
+
+function layoutSigns(): void {
+  const W = app.screen.width;
+  // upper sides — the old top-tree spots, where no houses are placed (the house ring
+  // is widest at mid-height, so signs sit here without colliding)
+  leftSign.position.set(92, L.riverY + 108);
+  rightSign.position.set(W - 92, L.riverY + 96);
+}
+layoutSigns();
+
+function updateSigns(n: Neighbors): void {
+  leftSign.setNeighbor(n?.left ?? null);
+  rightSign.setNeighbor(n?.right ?? null);
+  layoutSigns();
+}
 
 // tint the whole scene by local time of day (so the VILLAGE reflects it, not just the sky)
 function updateAmbient() {
@@ -274,7 +482,7 @@ async function applyCity(city: string) {
   const kind = codeToWeather(res.code);
   setWeather(kind);
   label.textContent = `${res.name}: ${WX_TEXT[kind]} ${res.temp}°C`;
-  localStorage.setItem("agentville.city", city);
+  safeLS.set("agentville.city", city);
 }
 
 // ---------------------------------------------------------------- static town
@@ -421,10 +629,12 @@ function drawTown() {
   fountain.circle(cx - 7, cy - 26, 2).circle(cx + 7, cy - 26, 2).circle(cx, cy - 42, 2.2).fill(0xbfe3ff); // water
   structStatic.addChild(fountain);
 
-  // fruit trees in the outer corners (apple / plum / orange)
-  structStatic.addChild(fruitTree(70, L.riverY + 110, 0xe63946));
-  structStatic.addChild(fruitTree(W - 70, L.riverY + 96, 0xb5179e));
-  structStatic.addChild(fruitTree(60, H - 70, 0xff8c1a));
+  // fruit trees scattered along the bottom (the upper-side spots now hold the
+  // village signposts); kept clear of the centre welcome sign
+  structStatic.addChild(fruitTree(64, H - 66, 0xe63946));
+  structStatic.addChild(fruitTree(W - 72, H - 58, 0xb5179e));
+  structStatic.addChild(fruitTree(168, H - 44, 0xff8c1a));
+  structStatic.addChild(fruitTree(W - 176, H - 50, 0x2a9d8f));
 
   // lampposts around the square (poles are part of the scene; the glow is drawn above the night tint)
   const lamps = new Graphics();
@@ -480,6 +690,7 @@ interface House {
   walls: Container; // structure
   roof: Container; // front
   h: number;
+  recolorRoof: (color: number) => void; // restyle the roof (town hall uses the village colour)
 }
 // houses are drawn around their own origin so they can be re-positioned on resize
 function buildHouse(color: number, isMayor: boolean): House {
@@ -503,26 +714,26 @@ function buildHouse(color: number, isMayor: boolean): House {
 
   const roof = new Container();
   const r = new Graphics();
-  r.poly([-w / 2 - 6, -h / 2 + 2, 0, -h / 2 - 26, w / 2 + 6, -h / 2 + 2]).fill(color).stroke({ width: 2, color: 0x00000022 });
-  if (isMayor) {
-    r.rect(-1, -h / 2 - 52, 2, 26).fill(0x6b4423);
-    r.poly([1, -h / 2 - 52, 24, -h / 2 - 45, 1, -h / 2 - 38]).fill(0xe63946);
-  }
+  const drawRoof = (c: number) => {
+    r.clear();
+    r.poly([-w / 2 - 6, -h / 2 + 2, 0, -h / 2 - 26, w / 2 + 6, -h / 2 + 2]).fill(c).stroke({ width: 2, color: 0x00000022 });
+    if (isMayor) {
+      r.rect(-1, -h / 2 - 52, 2, 26).fill(0x6b4423); // flagpole
+      r.poly([1, -h / 2 - 52, 24, -h / 2 - 45, 1, -h / 2 - 38]).fill(0xe63946); // flag
+    }
+  };
+  drawRoof(color);
   roof.addChild(r);
-  return { path, walls, roof, h };
+  return { path, walls, roof, h, recolorRoof: drawRoof };
 }
 
 // position a house at (x,y) and draw a path radiating inward to the square
 function placeHouse(house: House, x: number, y: number) {
   house.walls.position.set(x, y);
   house.roof.position.set(x, y);
-  // path is a strip from the house toward the square centre
-  const ang = Math.atan2(L.sq.cy - y, L.sq.cx - x);
-  const dist = Math.hypot(L.sq.cx - x, L.sq.cy - y);
-  const len = Math.max(0, dist - L.sq.rx * 0.92);
-  house.path.position.set(x, y);
-  house.path.rotation = ang;
-  house.path.clear().roundRect(house.h / 2 - 4, -8, len, 16, 8).fill(0xcaa472).stroke({ width: 1, color: 0xb08e5e });
+  // paths from houses to the square were removed by request — keep the (empty)
+  // Graphics so the layer/cleanup wiring is unchanged; just draw nothing.
+  house.path.clear();
 }
 
 // ---------------------------------------------------------------- agent sprite
@@ -539,7 +750,7 @@ class AgentSprite extends Container {
   private bubbleText: Text;
   private zzz: { t: Text; vy: number; life: number }[] = [];
   private dream = new Container();
-  private dreamClock = 0;
+  private dreamClock = -Math.random() * 360; // random per-agent offset so dreams don't all pop in sync
   private dreamLeft = 0;
   private house?: House;
 
@@ -591,7 +802,10 @@ class AgentSprite extends Container {
     this.prop.visible = false;
     this.dream.visible = false;
     this.inner.addChild(this.body, this.hat, this.face);
-    this.addChild(this.inner, this.prop, this.badge, this.nameplate, this.bubble, this.dream);
+    this.addChild(this.inner, this.prop, this.badge, this.nameplate);
+    // bubble + dream live in a TOP layer (above roofs) so the town-hall roof never
+    // hides them; their world position is synced to this sprite each tick().
+    bubbleLayer.addChild(this.bubble, this.dream);
     this.redraw();
   }
 
@@ -620,6 +834,7 @@ class AgentSprite extends Container {
     this.dream.addChild(cloud, t);
     this.dream.visible = true;
     this.dream.alpha = 0;
+    this.dream.position.set(this.x, this.y); // show at the agent immediately (it lives in bubbleLayer)
     this.dreamLeft = 230; // ~3.8s on screen
   }
 
@@ -629,7 +844,7 @@ class AgentSprite extends Container {
       this.dream.alpha = this.dreamLeft < 32 ? Math.max(0, this.dreamLeft / 32) : Math.min(1, this.dream.alpha + dt * 0.07);
       if (this.dreamLeft <= 0) {
         this.dream.visible = false;
-        this.dreamClock = -Math.random() * 240; // vary the gap before the next dream
+        this.dreamClock = -120 - Math.random() * 360; // vary the gap before the next dream
       }
     } else {
       this.dreamClock += dt;
@@ -642,7 +857,7 @@ class AgentSprite extends Container {
       this.dream.visible = false;
       for (const c of this.dream.removeChildren()) c.destroy();
     }
-    this.dreamClock = 0;
+    this.dreamClock = -Math.random() * 300; // staggered restart so dreams stay desynced
   }
 
   private setName(text: string) {
@@ -866,6 +1081,11 @@ class AgentSprite extends Container {
     this.y += dy * Math.min(1, dt * 0.1);
     const moving = Math.hypot(dx, dy) > 2;
 
+    // the bubble + dream live in a top layer (above roofs); keep them on this sprite.
+    // Synced here (right after the move) so anything shown later this frame is in place.
+    this.bubble.position.set(this.x, this.y);
+    this.dream.position.set(this.x, this.y);
+
     const sleeping = this.state === "idle" || this.state === "rateLimited";
     if (moving) {
       this.walkPhase += dt * 0.4;
@@ -919,6 +1139,15 @@ class AgentSprite extends Container {
       return true;
     });
   }
+
+  // bubble + dream are NOT children of this sprite (they sit in bubbleLayer), so
+  // destroy({children}) won't reach them — tear them down explicitly on reap.
+  destroyBubbles() {
+    this.bubble.parent?.removeChild(this.bubble);
+    this.bubble.destroy({ children: true });
+    this.dream.parent?.removeChild(this.dream);
+    this.dream.destroy({ children: true });
+  }
 }
 
 function shortTask(task: string): string {
@@ -931,6 +1160,7 @@ function shortTask(task: string): string {
 
 // ---------------------------------------------------------------- scene wiring
 const sprites = new Map<string, AgentSprite>();
+let mayorHouse: House | undefined; // the town-hall house, recoloured to the village colour
 let nextHomeSlot = 0;
 const freeSlots: number[] = [];
 const allocSlot = () => (freeSlots.length ? freeSlots.shift()! : nextHomeSlot++);
@@ -938,8 +1168,14 @@ const allocSlot = () => (freeSlots.length ? freeSlots.shift()! : nextHomeSlot++)
 // anchor (house center) for a sprite: mayor at the head, subagents ringed around the square
 function houseAnchor(sp: AgentSprite): { x: number; y: number } {
   if (sp.kind === "main") return L.mayor;
-  // distribute around the ring, leaving the top (where the mayor sits) clear
-  const ang = (-90 + 42 + sp.slot * 46) * (Math.PI / 180);
+  // distribute subagents on the LEFT and RIGHT arcs of the square, keeping the top
+  // centre clear (town hall) and the bottom centre clear (welcome sign + trees +
+  // grazing animals). Slots alternate sides and fan ±47.5° around due east / west.
+  const side = sp.slot % 2; // 0 = right, 1 = left
+  const k = Math.floor(sp.slot / 2);
+  const base = side === 0 ? 0 : 180;
+  const spread = (k % 6) * 19 - 47.5; // 6 positions per side, evenly fanned
+  const ang = ((base + spread) * Math.PI) / 180;
   return { x: L.sq.cx + Math.cos(ang) * L.ringRx, y: L.sq.cy + Math.sin(ang) * L.ringRy };
 }
 
@@ -951,8 +1187,10 @@ function ensureSprite(s: { agentId: string; kind: "main" | "subagent"; type?: st
     sprites.set(s.agentId, sp);
     agentLayer.addChild(sp);
 
-    const house = buildHouse(sp.color, s.kind === "main");
+    const isMayor = s.kind === "main";
+    const house = buildHouse(isMayor ? villageRoofColor() : sp.color, isMayor);
     sp.attachHouse(house);
+    if (isMayor) mayorHouse = house; // recoloured when the session/village colour is known
     pathLayer.addChild(house.path);
     houseWallLayer.addChild(house.walls);
     roofLayer.addChild(house.roof);
@@ -976,6 +1214,7 @@ function reflow() {
   }
   setWeather(weatherKind); // resize overlay + repopulate particles to new window size
   retarget();
+  layoutSigns();
 }
 
 function retarget() {
@@ -1009,6 +1248,7 @@ function reap(now: number) {
           part.destroy({ children: true });
         }
       }
+      s.destroyBubbles();
       s.destroy({ children: true });
       if (s.slot >= 0) freeSlots.push(s.slot);
       sprites.delete(id);
@@ -1245,6 +1485,7 @@ setTimeout(spawnFish, 3000);
 
 // ---------------------------------------------------------------- main loop
 drawTown(); // static scene fills the window
+buildEntrance(); // clouds cover the scene from frame 1 (parts only once armed, below)
 window.addEventListener("resize", reflow); // edge-to-edge reflow on resize
 setInterval(drawTown, 60_000); // refresh sky as the local time of day changes
 
@@ -1267,6 +1508,7 @@ app.ticker.add((time) => {
     }
   }
   stepWeather(dt);
+  stepEntrance(dt);
   reap(performance.now());
 });
 
@@ -1306,13 +1548,27 @@ updateHud();
 const setTown = () => {
   const v = townInput.value.trim();
   townName = v || "Agentville";
-  localStorage.setItem("agentville.town", townName);
+  safeLS.set("agentville.town", townName);
   updateHud();
   drawTown(); // redraw the welcome sign with the new name
 };
 townGo.addEventListener("click", setTown);
 townInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") setTown();
+});
+
+// per-village manual name (you can paste the chat's title here); shown in the HUD
+// and on this village's signpost in sibling tabs. Keyed by session id.
+const villageNameInput = document.getElementById("villageName") as HTMLInputElement;
+const villageGo = document.getElementById("villageGo")!;
+const setVillageName = () => {
+  if (!currentSessionId) return;
+  safeLS.set(villageNameKey(currentSessionId), villageNameInput.value.trim());
+  updateHud();
+};
+villageGo.addEventListener("click", setVillageName);
+villageNameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") setVillageName();
 });
 
 const timeMode = document.getElementById("timeMode") as HTMLSelectElement;
@@ -1351,7 +1607,7 @@ cityInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") submitCity();
 });
 
-const savedCity = localStorage.getItem("agentville.city");
+const savedCity = safeLS.get("agentville.city");
 if (savedCity) {
   cityInput.value = savedCity;
   refreshAuto();
@@ -1362,12 +1618,29 @@ setInterval(() => {
 
 window.agentville.onSessionInfo((info) => {
   projectName = info?.projectName ?? "";
+  currentSessionId = info?.sessionId ?? "";
+  currentTitle = info?.title ?? "";
+  if (mayorHouse && currentSessionId) mayorHouse.recolorRoof(villageColor(currentSessionId));
+  villageNameInput.value = manualVillageName(currentSessionId);
   updateHud();
 });
 window.agentville.onAgentDiff((changes) => {
   for (const c of changes) applyChange(c);
 });
+window.agentville.onNeighbors(updateSigns);
 
 const snap = await window.agentville.getSnapshot();
 for (const a of snap) ensureSprite({ agentId: a.agentId, kind: a.kind, type: a.type }).update(a.state, a.task, a.type);
 retarget();
+
+// town is fully loaded — let the curtains part now
+entranceArmed = true;
+
+// Demo villages to eyeball layout (0 = off). Off now — each village shows only its
+// own real agents, so switching tabs gives genuinely different towns.
+const DEMO_HOUSES = 0;
+for (let i = 0; i < DEMO_HOUSES; i++) {
+  const types = ["builder agent", "reviewer / qa", "architect spec", "researcher", "general", "writer"];
+  const t = types[i % types.length];
+  ensureSprite({ agentId: "demo-" + i, kind: "subagent", type: t }).update("idle", `demo task ${i + 1}`, t);
+}

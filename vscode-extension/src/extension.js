@@ -9,7 +9,7 @@ const injector = require('./injector');
 const { writeAndVerify } = require('./atomicWrite');
 const { resolveTargets } = require('./targets/claude-code');
 const statusBar = require('./statusBar');
-const { launchAgentville } = require('./launch');
+const { openPanel } = require('./panel');
 
 let reinjectTimer = null;
 let lastFocusCheck = 0;
@@ -17,21 +17,6 @@ const FOCUS_REINJECT_THROTTLE_MS = 30000;
 
 function getConfig() {
   return vscode.workspace.getConfiguration('agentville');
-}
-
-/** Absolute path to the Agentville repo (the app to launch). */
-function appPath() {
-  const configured = (getConfig().get('appPath', '') || '').trim();
-  if (configured) return configured;
-  // Fallback: an open workspace folder that looks like the built Agentville repo,
-  // so the launcher works out-of-the-box when you have the repo open. Override via
-  // the agentville.appPath setting when the app lives elsewhere.
-  const folders = vscode.workspace.workspaceFolders || [];
-  for (const f of folders) {
-    const dir = f.uri && f.uri.fsPath;
-    if (dir && fs.existsSync(path.join(dir, 'dist', 'main.cjs'))) return dir;
-  }
-  return '';
 }
 
 function loadWebviewScript(context) {
@@ -155,21 +140,6 @@ function offerReload() {
   });
 }
 
-/** Launch the app, surfacing a clear error if the path/build is missing. */
-function doLaunch() {
-  const r = launchAgentville(appPath());
-  if (!r.ok) {
-    vscode.window.showErrorMessage(
-      `Agentville: ${r.error}`,
-      'Open Settings'
-    ).then((choice) => {
-      if (choice === 'Open Settings') {
-        vscode.commands.executeCommand('workbench.action.openSettings', 'agentville.appPath');
-      }
-    });
-  }
-}
-
 function activate(context) {
   // Register the launch paths FIRST, before anything that can throw (e.g. reading
   // the webview script off disk). onUri can activate this extension via the footer
@@ -177,7 +147,7 @@ function activate(context) {
   statusBar.create(vscode, context);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('agentville.open', doLaunch),
+    vscode.commands.registerCommand('agentville.open', () => openPanel(context)),
     vscode.commands.registerCommand('agentville.checkAndInject', () => {
       const r = checkAndInject(context, { interactive: true });
       if (r.changed > 0) offerReload();
@@ -195,7 +165,7 @@ function activate(context) {
       handleUri(uri) {
         // uri.path is "/open" for vscode://orbenozio.agentville-launcher/open
         const cmd = (uri.path || '').replace(/^\/+/, '').replace(/\/+$/, '');
-        if (cmd === 'open') doLaunch();
+        if (cmd === 'open') openPanel(context);
       },
     })
   );
