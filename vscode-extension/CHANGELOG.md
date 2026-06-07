@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+- Village signposts now cycle only the most-recently-active conversations in the project
+  (not all of them), with a "Villages to cycle" control in the settings popup (default 6).
+- Reorganised the settings popup into three sections: Town & villages, Critters & nature,
+  Weather & time.
+
 ## 0.1.5
 
 - Bundle Pixi again (offline-capable, no network needed for the town). Distributed via

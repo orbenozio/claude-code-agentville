@@ -83,6 +83,7 @@
         flex: 1;
       }
       #panel input[type="text"],
+      #panel input[type="number"],
       #panel select {
         flex: 1;
         min-width: 0;
@@ -117,17 +118,20 @@
     <div id="hud">Agentville 🏘️ — connecting…</div>
     <button id="gear" title="Settings">⚙️</button>
     <div id="panel">
-      <h3>🏷️ Town name</h3>
+      <h3>🏘️ Town &amp; villages</h3>
       <div class="row">
-        <input id="townName" type="text" placeholder="Name your town" maxlength="22" />
+        <input id="townName" type="text" placeholder="Town name" maxlength="22" />
         <button id="townGo" class="mini">Set</button>
       </div>
-      <h3 style="margin-top: 12px">📛 This village (chat)</h3>
       <div class="row">
-        <input id="villageName" type="text" placeholder="Name this chat" maxlength="40" />
+        <input id="villageName" type="text" placeholder="This chat's name" maxlength="40" />
         <button id="villageGo" class="mini">Set</button>
       </div>
-      <h3 style="margin-top: 12px">🐾 Village critters</h3>
+      <div class="row">
+        <span>Villages to cycle</span>
+        <input id="maxVillages" type="number" min="2" max="30" value="6" style="width: 54px; flex: 0 0 auto" />
+      </div>
+      <h3 style="margin-top: 12px">🐾 Critters &amp; nature</h3>
       <label><input type="checkbox" data-animal="bird" checked /> 🐦 Birds</label>
       <label><input type="checkbox" data-animal="sheep" checked /> 🐑 Sheep</label>
       <label><input type="checkbox" data-animal="cow" checked /> 🐄 Cows</label>

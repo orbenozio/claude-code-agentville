@@ -69,6 +69,7 @@
     getSnapshot: function () { return request('getSnapshot'); },
     getWeather: function (city) { return request('getWeather', [city]); },
     switchSession: function (sessionId) { return request('switchSession', [sessionId]); },
+    setMaxVillages: function (n) { return request('setMaxVillages', [n]); },
   };
 
   // Tell the host the webview is alive and listening — it starts the monitor now,

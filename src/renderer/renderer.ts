@@ -22,6 +22,7 @@ interface AgentvilleApi {
   getSnapshot(): Promise<AgentState[]>;
   getWeather(city: string): Promise<WeatherResult>;
   switchSession(sessionId: string): Promise<boolean>;
+  setMaxVillages(n: number): Promise<boolean>;
 }
 declare global {
   interface Window {
@@ -1583,6 +1584,20 @@ villageGo.addEventListener("click", setVillageName);
 villageNameInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") setVillageName();
 });
+
+// how many recent conversations the signposts cycle between (the host caps to this)
+const maxVillagesInput = document.getElementById("maxVillages") as HTMLInputElement;
+maxVillagesInput.value = safeLS.get("agentville.maxVillages") || "6";
+const applyMaxVillages = () => {
+  let n = parseInt(maxVillagesInput.value, 10);
+  if (isNaN(n)) n = 6;
+  n = Math.max(2, Math.min(30, n));
+  maxVillagesInput.value = String(n);
+  safeLS.set("agentville.maxVillages", String(n));
+  void window.agentville.setMaxVillages(n);
+};
+maxVillagesInput.addEventListener("change", applyMaxVillages);
+void window.agentville.setMaxVillages(parseInt(maxVillagesInput.value, 10) || 6); // seed the host with the saved value
 
 const timeMode = document.getElementById("timeMode") as HTMLSelectElement;
 timeMode.addEventListener("change", () => {

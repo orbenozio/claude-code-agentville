@@ -52,6 +52,17 @@ async function getWeather(city) {
   }
 }
 
+// Keep only the most-recently-active villages (Claude's set of OPEN tabs isn't exposed
+// to extensions, so "recently active" is the closest proxy). Always include the current
+// session so you can navigate away from an older chat you've opened.
+function recentVillages(sibs, currentId, max) {
+  if (sibs.length <= max) return sibs;
+  const top = sibs.slice(0, max); // sibs are hottest-first
+  if (top.some((s) => s.sessionId === currentId)) return top;
+  const cur = sibs.find((s) => s.sessionId === currentId);
+  return cur ? [...sibs.slice(0, max - 1), cur] : top;
+}
+
 // Left/right navigation to sibling conversations of the SAME project (villages).
 // prev/next with wrap; with exactly 2 sessions both directions are the same other
 // village, so we only surface one sign (right).
@@ -60,6 +71,10 @@ async function computeNeighbors(monitor) {
   if (!cur) return { left: null, right: null };
   let sibs = [];
   try { sibs = await siblingSessions(cur.projectDir); } catch (_) { return { left: null, right: null }; }
+  // cap to the N most recent so a project with dozens of old chats doesn't cycle them all
+  // (N comes from the webview settings popup, via setMaxVillages)
+  const max = Math.max(2, (current && current.maxVillages) || 6);
+  sibs = recentVillages(sibs, cur.sessionId, max);
   if (sibs.length < 2) return { left: null, right: null };
   const idx = sibs.findIndex((s) => s.sessionId === cur.sessionId);
   if (idx < 0) return { left: null, right: null };
@@ -135,7 +150,7 @@ function openPanel(context) {
     retainContextWhenHidden: true,
     localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
   });
-  current = { panel, monitor: null, target: null };
+  current = { panel, monitor: null, target: null, maxVillages: 6 };
   panel.webview.html = renderHtml(panel.webview, context.extensionPath);
 
   panel.webview.onDidReceiveMessage(async (msg) => {
@@ -146,6 +161,16 @@ function openPanel(context) {
       if (msg.method === 'switchSession') {
         const ok = await doSwitch(context, (msg.args || [])[0]);
         panel.webview.postMessage({ type: 'response', id: msg.id, result: ok });
+        return;
+      }
+      if (msg.method === 'setMaxVillages') {
+        if (current) current.maxVillages = Math.max(2, Number((msg.args || [])[0]) || 6);
+        try {
+          if (current && current.monitor) {
+            panel.webview.postMessage({ type: 'neighbors', neighbors: await computeNeighbors(current.monitor) });
+          }
+        } catch (e) { console.error('[Agentville] recompute neighbors failed:', e); }
+        panel.webview.postMessage({ type: 'response', id: msg.id, result: true });
         return;
       }
       // Defaults must be SAFE shapes — the renderer iterates the snapshot and reads
