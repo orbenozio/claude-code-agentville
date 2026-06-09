@@ -83,7 +83,11 @@ observe and/or augment Claude Code.
 - 🖥️ **Runs two ways** — as a standalone Electron app **or** inside a VS Code tab via the
   bundled extension (with a 🌍 button injected into the Claude Code panel).
 
-> 📸 _Screenshots/GIF coming soon — drop a `docs/` capture here once the visual MVP is recorded._
+<div align="center">
+
+<img src="docs/agentville-demo.gif" alt="Agentville - a live town view of Claude Code agents at work" width="720" />
+
+</div>
 
 ## 🚦 Agent States
 
