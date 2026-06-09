@@ -123,6 +123,13 @@ async function activateTarget() {
   } catch (e) {
     console.error('[Agentville] neighbors failed:', e);
   }
+  // If the panel was opened in a background column (not the active tab), onDidChangeViewState
+  // won't have fired yet — sync the initial visibility so we don't run the monitor + render
+  // loop full-tilt behind another tab, competing with Claude for the shared host.
+  if (!panel.visible) {
+    try { monitor.pause(); } catch (_) {}
+    try { panel.webview.postMessage({ type: 'visibility', visible: false }); } catch (_) {}
+  }
 }
 
 // Switch to another village: pin the chosen session and reload the webview. The
@@ -184,6 +191,21 @@ function openPanel(context) {
       }
       panel.webview.postMessage({ type: 'response', id: msg.id, result });
     }
+  }, undefined, context.subscriptions);
+
+  // Pause the village while it's hidden behind another tab. The panel + Claude Code
+  // share one extension-host and one webview-renderer process; left running, the
+  // monitor's file polling and Pixi's render loop compete with Claude for those
+  // resources and can stall the conversation. Suspend both when not visible.
+  panel.onDidChangeViewState((e) => {
+    if (!current || current.panel !== panel) return;
+    const visible = e.webviewPanel.visible;
+    if (visible) {
+      if (current.monitor) void current.monitor.resume();
+    } else if (current.monitor) {
+      current.monitor.pause();
+    }
+    try { panel.webview.postMessage({ type: 'visibility', visible }); } catch (_) {}
   }, undefined, context.subscriptions);
 
   panel.onDidDispose(() => {

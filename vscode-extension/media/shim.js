@@ -37,6 +37,7 @@
   var diffCbs = [];
   var sessCbs = [];
   var nbCbs = [];
+  var visCbs = [];
   var pending = new Map();
   var reqId = 0;
 
@@ -48,6 +49,8 @@
       for (var j = 0; j < sessCbs.length; j++) sessCbs[j](m.info);
     } else if (m.type === 'neighbors') {
       for (var k = 0; k < nbCbs.length; k++) nbCbs[k](m.neighbors);
+    } else if (m.type === 'visibility') {
+      for (var v = 0; v < visCbs.length; v++) visCbs[v](m.visible);
     } else if (m.type === 'response') {
       var r = pending.get(m.id);
       if (r) { pending.delete(m.id); r(m.result); }
@@ -66,6 +69,7 @@
     onAgentDiff: function (cb) { diffCbs.push(cb); },
     onSessionInfo: function (cb) { sessCbs.push(cb); },
     onNeighbors: function (cb) { nbCbs.push(cb); },
+    onVisibility: function (cb) { visCbs.push(cb); },
     getSnapshot: function () { return request('getSnapshot'); },
     getWeather: function (city) { return request('getWeather', [city]); },
     switchSession: function (sessionId) { return request('switchSession', [sessionId]); },

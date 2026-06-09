@@ -6,10 +6,13 @@ export type AgentKind = "main" | "subagent";
 export type AgentVisualState =
   | "idle" // 🏠
   | "working" // 🏭
+  | "awaitingApproval" // ⏳ waiting for the user to approve a permission (hooks channel)
   | "done" // ✅ (subagent only)
   | "error" // ⚠️
   | "rateLimited"; // 😴
-// note: "awaitingApproval" (⏳) is deferred to the hooks channel — not derived in spike-0.
+// note: "awaitingApproval" (⏳) is derived only from the hooks channel (SPEC §6.3). It is
+// part of the type so the renderer/reducer surface is exhaustive and ready; until the hook
+// is wired (roadmap phase 3) nothing emits it, but the visual shell already handles it.
 
 /**
  * A raw JSONL line (or hook event) normalized into a stable internal shape.

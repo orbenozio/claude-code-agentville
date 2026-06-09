@@ -29,10 +29,13 @@ export class SessionMonitor {
   private readonly hookReader = new TailReader(HOOK_EVENTS_FILE, 0);
   private watchers: FSWatcher[] = [];
   private tickTimer?: NodeJS.Timeout;
+  private pumpTimer?: NodeJS.Timeout; // debounce: coalesce bursts of file-change events
+  private pumpPending = false; // an event arrived while a pump was already scheduled — run once more
   private session?: SessionInfo;
   private cwdPath?: string;
   private stopped = false; // once stopped, never emit again (prevents an in-flight pump
   // from a switched-away session leaking its agents into the newly-opened village)
+  private paused = false; // pause()d while the panel is hidden — no watchers, no ticks
 
   constructor(private readonly onChanges: (changes: StateChange[]) => void) {}
 
@@ -96,8 +99,20 @@ export class SessionMonitor {
 
     this.addReader(session.mainFile, undefined, true);
 
+    this.startWatchers();
+
+    await this.pump();
+    return session;
+  }
+
+  /** Create the file watchers + the periodic reducer tick. Idempotent-safe to call
+   *  again after pause() (readers/reducer state are preserved across pause/resume). */
+  private startWatchers(): void {
+    const session = this.session;
+    if (!session) return;
+
     const mainWatcher = chokidar.watch(session.mainFile, { usePolling: true, interval: 300, persistent: true });
-    mainWatcher.on("change", () => void this.pump());
+    mainWatcher.on("change", () => this.schedulePump());
 
     const saWatcher = chokidar.watch(session.subagentsDir, {
       usePolling: true,
@@ -113,11 +128,11 @@ export class SessionMonitor {
         .then((st) => {
           if (Date.now() - st.mtimeMs > STALE_AGENT_MS) return; // finished long ago — skip
           this.addReader(file, m[1], false);
-          void this.pump();
+          this.schedulePump();
         })
         .catch(() => {});
     });
-    saWatcher.on("change", () => void this.pump());
+    saWatcher.on("change", () => this.schedulePump());
 
     // hooks channel — tail the events file if/when it exists (forward-ready;
     // no-op until the user installs the Agentville hook, see SPIKE-FINDINGS).
@@ -127,21 +142,57 @@ export class SessionMonitor {
       persistent: true,
       ignoreInitial: false,
     });
-    hookWatcher.on("add", () => void this.pump());
-    hookWatcher.on("change", () => void this.pump());
+    hookWatcher.on("add", () => this.schedulePump());
+    hookWatcher.on("change", () => this.schedulePump());
 
     this.watchers = [mainWatcher, saWatcher, hookWatcher];
     this.tickTimer = setInterval(() => this.emit(this.reducer.tick()), 3000);
+  }
 
+  /** Throttle bursts of file-change events to one pump() per ~120ms so a rapidly-growing
+   *  JSONL (Claude actively answering) doesn't flood the shared extension-host event loop
+   *  with one pump per write. Leading-edge for responsiveness during the burst, with a
+   *  guaranteed trailing pump so the LAST write of a burst is never stranded until the
+   *  next 3s tick (events that land while a pump is in flight set pumpPending). */
+  private schedulePump(): void {
+    if (this.stopped || this.paused) return;
+    if (this.pumpTimer) { this.pumpPending = true; return; }
+    this.pumpTimer = setTimeout(() => {
+      this.pumpTimer = undefined;
+      const again = this.pumpPending;
+      this.pumpPending = false;
+      void this.pump();
+      if (again) this.schedulePump(); // catch the tail of the burst
+    }, 120);
+  }
+
+  /** Suspend all work while the panel is hidden: tear down watchers + timers but keep
+   *  reader offsets and reducer state, so resume() picks up exactly where we left off. */
+  pause(): void {
+    if (this.paused || this.stopped) return;
+    this.paused = true;
+    for (const w of this.watchers) void w.close();
+    this.watchers = [];
+    if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = undefined; }
+    if (this.pumpTimer) { clearTimeout(this.pumpTimer); this.pumpTimer = undefined; }
+    this.pumpPending = false;
+  }
+
+  /** Resume after pause(): re-arm watchers and catch up on anything written while hidden. */
+  async resume(): Promise<void> {
+    if (!this.paused || this.stopped || !this.session) return;
+    this.paused = false;
+    this.startWatchers();
     await this.pump();
-    return session;
   }
 
   stop(): void {
     this.stopped = true;
     for (const w of this.watchers) void w.close();
     this.watchers = [];
-    if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.tickTimer) { clearInterval(this.tickTimer); this.tickTimer = undefined; }
+    if (this.pumpTimer) { clearTimeout(this.pumpTimer); this.pumpTimer = undefined; }
+    this.pumpPending = false;
   }
 
   private addReader(file: string, agentId: string | undefined, fromTail: boolean): void {
@@ -150,7 +201,7 @@ export class SessionMonitor {
   }
 
   private async pump(): Promise<void> {
-    if (this.stopped || !this.session) return;
+    if (this.stopped || this.paused || !this.session) return;
     const all: StateChange[] = [];
     // channel A — JSONL tail (main session + subagent files)
     for (const { reader, agentId } of this.readers.values()) {

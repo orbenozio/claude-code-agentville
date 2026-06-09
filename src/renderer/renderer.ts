@@ -19,6 +19,7 @@ interface AgentvilleApi {
   onAgentDiff(cb: (changes: StateChange[]) => void): void;
   onSessionInfo(cb: (info: SessionInfo | null) => void): void;
   onNeighbors(cb: (n: Neighbors) => void): void;
+  onVisibility(cb: (visible: boolean) => void): void;
   getSnapshot(): Promise<AgentState[]>;
   getWeather(city: string): Promise<WeatherResult>;
   switchSession(sessionId: string): Promise<boolean>;
@@ -52,6 +53,7 @@ const safeLS = {
 const STATE_BADGE: Record<AgentVisualState, string> = {
   idle: "",
   working: "",
+  awaitingApproval: "⏳",
   done: "✅",
   error: "⚠️",
   rateLimited: "😴",
@@ -89,6 +91,9 @@ let townName = safeLS.get("agentville.town") || "Agentville";
 let projectName = "";
 let currentSessionId = "";
 let currentTitle = "";
+// false while the panel is hidden behind another tab — gates the spawn/redraw timers so
+// they don't pile up sprites the (stopped) ticker can't reap. Set by onVisibility, below.
+let panelVisible = true;
 
 // deterministic per-conversation hue, so each "village" gets a clear, stable colour
 function villageHue(id: string): number {
@@ -133,8 +138,9 @@ function updateHud() {
 }
 
 const app = new Application();
+const appEl = document.getElementById("app")!;
 await app.init({ resizeTo: window, background: 0x7ec850, antialias: true });
-document.getElementById("app")!.appendChild(app.canvas);
+appEl.appendChild(app.canvas);
 app.stage.eventMode = "static"; // enable hit-testing so the signposts are clickable
 
 
@@ -284,7 +290,7 @@ class Signpost extends Container {
     this.arrow = new Text({ text: side === "left" ? "◀" : "▶", style: { fontFamily: "Segoe UI", fontSize: 20, fontWeight: "900", fill: 0x6b4423 } });
     this.titleText = new Text({
       text: "",
-      style: { fontFamily: "Comic Sans MS", fontSize: 12, fontWeight: "700", fill: 0x3a2a16, align: "center", wordWrap: true, wordWrapWidth: 132 },
+      style: { fontFamily: '"Comic Sans MS", "Trebuchet MS", Verdana, sans-serif', fontSize: 12, fontWeight: "700", fill: 0x3a2a16, align: "center", wordWrap: true, wordWrapWidth: 132 },
     });
     this.arrow.anchor.set(0.5);
     this.titleText.anchor.set(0.5);
@@ -325,13 +331,64 @@ function layoutSigns(): void {
   // is widest at mid-height, so signs sit here without colliding)
   leftSign.position.set(92, L.riverY + 108);
   rightSign.position.set(W - 92, L.riverY + 96);
+  // two 168px-wide signs collide (and bury the centre) on a very narrow panel — hide the
+  // on-canvas signs there; the keyboard-accessible nav buttons still work.
+  const narrow = W < 360;
+  leftSign.visible = !narrow && !!leftSign.sessionId;
+  rightSign.visible = !narrow && !!rightSign.sessionId;
 }
 layoutSigns();
+
+// keyboard/screen-reader mirror of the two on-canvas signposts (the canvas is decorative)
+const navPrevBtn = document.getElementById("navPrev") as HTMLButtonElement;
+const navNextBtn = document.getElementById("navNext") as HTMLButtonElement;
+const a11yStatus = document.getElementById("a11yStatus")!;
+let lastAnnounce = "";
+function announce(msg: string): void {
+  if (!msg || msg === lastAnnounce) return;
+  lastAnnounce = msg;
+  a11yStatus.textContent = msg;
+}
+function wireNav(btn: HTMLButtonElement, n: Neighbor): void {
+  if (n) {
+    const label = manualVillageName(n.sessionId) || n.title || "chat";
+    btn.disabled = false;
+    btn.setAttribute("aria-label", (btn.id === "navPrev" ? "Previous chat village: " : "Next chat village: ") + label);
+    btn.onclick = () => void window.agentville.switchSession(n.sessionId);
+  } else {
+    btn.disabled = true;
+    btn.onclick = null;
+  }
+}
 
 function updateSigns(n: Neighbors): void {
   leftSign.setNeighbor(n?.left ?? null);
   rightSign.setNeighbor(n?.right ?? null);
   layoutSigns();
+  wireNav(navPrevBtn, n?.left ?? null);
+  wireNav(navNextBtn, n?.right ?? null);
+}
+
+// Plain-language summary of the village for the canvas's aria-label, so a screen-reader
+// user gets the same "what's happening" the visuals convey. Refreshed on every change.
+const A11Y_STATE: Record<AgentVisualState, string> = {
+  idle: "resting",
+  working: "working",
+  awaitingApproval: "waiting for your approval",
+  done: "finished",
+  error: "hit an error",
+  rateLimited: "waiting on a rate limit",
+};
+function updateA11y(): void {
+  const all = [...sprites.values()];
+  if (all.length === 0) {
+    appEl.setAttribute("aria-label", `${townName}: no agents running yet`);
+    return;
+  }
+  const counts = new Map<AgentVisualState, number>();
+  for (const s of all) counts.set(s.state, (counts.get(s.state) ?? 0) + 1);
+  const parts = [...counts.entries()].map(([st, c]) => `${c} ${A11Y_STATE[st]}`);
+  appEl.setAttribute("aria-label", `${townName}: ${all.length} agent${all.length === 1 ? "" : "s"} - ${parts.join(", ")}`);
 }
 
 // tint the whole scene by local time of day (so the VILLAGE reflects it, not just the sky)
@@ -777,6 +834,8 @@ class AgentSprite extends Container {
   private bob = Math.random() * Math.PI * 2;
   private walkPhase = 0;
   private zClock = 0;
+  private flash = 0; // 1→0 pop on every state change, so transitions are never silent
+  private attnPhase = Math.random() * Math.PI * 2; // pulse for states that need the user (⏳/⚠️)
   private wanderClock = 0;
   private wanderTarget?: { x: number; y: number };
   // role-specific activity prop (SPEC: build→structure, review→magnifier, etc.)
@@ -875,7 +934,9 @@ class AgentSprite extends Container {
   }
 
   private setName(text: string) {
-    this.nameLabel.text = text;
+    // cap long type names (e.g. "general-purpose research agent") so the nameplate can't
+    // stretch out and overlap neighbouring agents / run off the panel edge.
+    this.nameLabel.text = text.length > 18 ? text.slice(0, 17) + "…" : text;
     const w = this.nameLabel.width + 14;
     const h = this.nameLabel.height + 6;
     this.nameBg
@@ -962,6 +1023,7 @@ class AgentSprite extends Container {
     this.bubble.visible = showBubble;
     if (showBubble) this.drawThought(shortTask(this.lastTask!));
     if (was !== state || roleChanged) this.redraw();
+    if (was !== state) this.flash = 1; // brief pop so the eye catches the transition
     if (state === "working" && was !== "working") this.wanderTarget = undefined;
   }
 
@@ -1138,6 +1200,17 @@ class AgentSprite extends Container {
 
     if (this.prop.visible && !moving) this.animateProp(dt); // play the role activity while stationed
 
+    // Badge feedback: a quick pop on every state change, plus a steady pulse for the
+    // states that are actually waiting on the user (⏳ approval, ⚠️ error) so they stand
+    // out in a crowd of busy agents instead of blending in.
+    this.flash = Math.max(0, this.flash - dt * 0.05);
+    let badgeScale = 1 + this.flash * 0.6;
+    if (this.state === "awaitingApproval" || this.state === "error") {
+      this.attnPhase += dt * 0.12;
+      badgeScale *= 1 + Math.abs(Math.sin(this.attnPhase)) * 0.18;
+    }
+    this.badge.scale.set(badgeScale);
+
     for (const z of this.zzz) {
       z.t.y += z.vy * dt;
       z.t.x += dt * 0.15;
@@ -1175,6 +1248,20 @@ function shortTask(task: string): string {
 // ---------------------------------------------------------------- scene wiring
 const sprites = new Map<string, AgentSprite>();
 let mayorHouse: House | undefined; // the town-hall house, recoloured to the village colour
+
+// "Quiet village" hint shown when no agents are running, so an empty town reads as
+// "waiting" rather than "broken / still loading".
+const emptyHint = new Text({
+  text: "The village is quiet - waiting for agents…",
+  style: { fontFamily: '"Comic Sans MS", "Trebuchet MS", Verdana, sans-serif', fontSize: 15, fontWeight: "700", fill: 0xffffff, stroke: { color: 0x2c4a1e, width: 4 }, align: "center" },
+});
+emptyHint.anchor.set(0.5);
+emptyHint.visible = false;
+bubbleLayer.addChild(emptyHint);
+function updateEmptyState(): void {
+  emptyHint.visible = sprites.size === 0;
+  if (emptyHint.visible) emptyHint.position.set(app.screen.width / 2, app.screen.height / 2);
+}
 let nextHomeSlot = 0;
 const freeSlots: number[] = [];
 const allocSlot = () => (freeSlots.length ? freeSlots.shift()! : nextHomeSlot++);
@@ -1187,10 +1274,14 @@ function houseAnchor(sp: AgentSprite): { x: number; y: number } {
   // grazing animals). Slots alternate sides and fan ±47.5° around due east / west.
   const side = sp.slot % 2; // 0 = right, 1 = left
   const k = Math.floor(sp.slot / 2);
+  const ring = Math.floor(k / 6); // 0 = inner arc, 1+ = concentric outer arcs for big runs
+  const idx = k % 6;
   const base = side === 0 ? 0 : 180;
-  const spread = (k % 6) * 19 - 47.5; // 6 positions per side, evenly fanned
+  const spread = idx * 19 - 47.5; // 6 positions per side, evenly fanned
   const ang = ((base + spread) * Math.PI) / 180;
-  return { x: L.sq.cx + Math.cos(ang) * L.ringRx, y: L.sq.cy + Math.sin(ang) * L.ringRy };
+  // beyond 12 subagents, ring out instead of stacking houses on top of each other
+  const rMul = 1 + ring * 0.34;
+  return { x: L.sq.cx + Math.cos(ang) * L.ringRx * rMul, y: L.sq.cy + Math.sin(ang) * L.ringRy * rMul };
 }
 
 function ensureSprite(s: { agentId: string; kind: "main" | "subagent"; type?: string }): AgentSprite {
@@ -1219,6 +1310,10 @@ function ensureSprite(s: { agentId: string; kind: "main" | "subagent"; type?: st
 
 // re-place all houses/homes after the layout changed (window resize)
 function reflow() {
+  // Guard against a 0x0 (or near-zero) screen — when the panel is hidden/minimised the
+  // host can report a collapsed window, and laying out around W/2 = 0 stacks the whole
+  // village into the top-left corner. Skip until we have real dimensions again.
+  if (app.screen.width < 2 || app.screen.height < 2) return;
   drawTown();
   for (const sp of sprites.values()) {
     const house = sp.houseRef();
@@ -1229,6 +1324,7 @@ function reflow() {
   setWeather(weatherKind); // resize overlay + repopulate particles to new window size
   retarget();
   layoutSigns();
+  updateEmptyState(); // recenter the quiet-village hint
 }
 
 function retarget() {
@@ -1236,9 +1332,18 @@ function retarget() {
   const atFactory = [...sprites.values()].filter(
     (s) => s.state === "working" || s.state === "error" || s.state === "rateLimited",
   );
+  // Lay the working agents out in a grid that always fits inside the factory floor: more
+  // columns and tighter rows as the crowd grows, so they never spill past the bottom edge.
+  const z = L.workFloor;
+  const n = atFactory.length;
+  const cols = Math.max(1, Math.min(n, Math.floor(z.w / 46) || 4));
+  const rows = Math.max(1, Math.ceil(n / cols));
+  const cw = z.w / cols;
+  const rh = Math.min(34, (z.h - 12) / rows);
   atFactory.forEach((s, i) => {
-    const z = L.workFloor;
-    s.target = { x: z.x + 24 + (i % 4) * (z.w / 4), y: z.y + 12 + Math.floor(i / 4) * 34 };
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    s.target = { x: z.x + cw * (col + 0.5), y: z.y + 12 + row * rh };
   });
   for (const s of sprites.values()) {
     if (s.state === "idle" || s.state === "done") s.target = { x: s.home.x, y: s.home.y };
@@ -1247,12 +1352,21 @@ function retarget() {
 
 function applyChange(c: StateChange) {
   const sp = ensureSprite({ agentId: c.agentId, kind: c.state.kind, type: c.state.type });
+  const was = sp.state;
   sp.update(c.after, c.state.task, c.state.type);
   retarget();
+  updateA11y();
+  updateEmptyState();
+  // speak only the transitions that matter to the user (don't narrate every working tick)
+  if (c.after !== was && (c.after === "awaitingApproval" || c.after === "error" || c.after === "rateLimited" || c.after === "done")) {
+    const who = sp.kind === "main" ? "The mayor" : (c.state.type || "An agent");
+    announce(`${who} ${A11Y_STATE[c.after]}.`);
+  }
 }
 
 const DONE_VANISH_MS = 90 * 1000; // finished agents walk home, then leave town
 function reap(now: number) {
+  let removed = false;
   for (const [id, s] of sprites) {
     if (s.state === "done" && s.doneAt > 0 && now - s.doneAt > DONE_VANISH_MS) {
       agentLayer.removeChild(s);
@@ -1266,7 +1380,12 @@ function reap(now: number) {
       s.destroy({ children: true });
       if (s.slot >= 0) freeSlots.push(s.slot);
       sprites.delete(id);
+      removed = true;
     }
+  }
+  if (removed) {
+    updateA11y();
+    updateEmptyState();
   }
 }
 
@@ -1415,6 +1534,7 @@ const animalConfig = {
 
 const animals: Animal[] = [];
 function spawnAnimal() {
+  if (!panelVisible) return; // don't accumulate critters the stopped ticker can't reap
   if (animals.length >= animalConfig.max) return;
   const enabled = (["bird", ...GROUND_KINDS] as AnimalKind[]).filter((k) => animalConfig.enabled[k]);
   if (enabled.length === 0) return;
@@ -1487,7 +1607,8 @@ class Fish extends Container {
 }
 const fishes: Fish[] = [];
 function spawnFish() {
-  if (!animalConfig.fish) return;
+  if (!panelVisible) return; // don't accumulate fish the stopped ticker can't reap
+  if (!animalConfig.fish || fishes.length >= 6) return;
   const dir: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
   const x = 80 + Math.random() * (app.screen.width - 160);
   const fish = new Fish(x, dir);
@@ -1500,8 +1621,24 @@ setTimeout(spawnFish, 3000);
 // ---------------------------------------------------------------- main loop
 drawTown(); // static scene fills the window
 buildEntrance(); // clouds cover the scene from frame 1 (parts only once armed, below)
-window.addEventListener("resize", reflow); // edge-to-edge reflow on resize
-setInterval(drawTown, 60_000); // refresh sky as the local time of day changes
+
+// Coalesce a burst of resize events (dragging the panel divider fires dozens/sec, and
+// reflow() rebuilds the whole scene) into one reflow on the next frame.
+let reflowQueued = false;
+function scheduleReflow() {
+  if (reflowQueued) return;
+  reflowQueued = true;
+  requestAnimationFrame(() => {
+    reflowQueued = false;
+    reflow();
+  });
+}
+window.addEventListener("resize", scheduleReflow); // edge-to-edge reflow on window resize
+// Inside a VS Code webview a panel-size change does not always fire a window `resize`
+// event, but it does resize the container div — observe it directly so the village keeps
+// filling the panel (and recovers from the collapsed-to-corner state on its own).
+new ResizeObserver(() => scheduleReflow()).observe(appEl);
+setInterval(() => { if (panelVisible) drawTown(); }, 60_000); // refresh sky as the local time of day changes (skip while hidden)
 
 app.ticker.add((time) => {
   const dt = time.deltaTime;
@@ -1656,13 +1793,44 @@ window.agentville.onAgentDiff((changes) => {
   for (const c of changes) applyChange(c);
 });
 window.agentville.onNeighbors(updateSigns);
+// Stop the render loop while the panel is hidden so Pixi's rAF doesn't keep eating
+// the renderer/GPU behind another tab (the host pauses the file monitor in tandem).
+window.agentville.onVisibility((visible) => {
+  panelVisible = visible;
+  if (visible) {
+    // Pixi's resizeTo: window only applies the new size from inside the ticker, so while
+    // hidden (ticker stopped) any resize is lost and app.screen keeps a stale/0 size.
+    // Re-sync the renderer to the real window, reflow once, THEN restart the loop — this
+    // is what brings the village back without the user having to nudge the window.
+    if (window.innerWidth > 0 && window.innerHeight > 0) {
+      app.renderer.resize(window.innerWidth, window.innerHeight);
+    }
+    reflow();
+    app.ticker.start();
+  } else {
+    app.ticker.stop();
+  }
+});
 
-const snap = await window.agentville.getSnapshot();
-for (const a of snap) ensureSprite({ agentId: a.agentId, kind: a.kind, type: a.type }).update(a.state, a.task, a.type);
-retarget();
-
-// town is fully loaded — let the curtains part now
-entranceArmed = true;
+// Safety net: never leave the user stuck behind the closed curtain. If the snapshot
+// hangs or throws, part the curtain anyway after 4s so they at least see the village.
+const curtainSafety = setTimeout(() => {
+  entranceArmed = true;
+}, 4000);
+try {
+  const snap = await window.agentville.getSnapshot();
+  for (const a of snap) ensureSprite({ agentId: a.agentId, kind: a.kind, type: a.type }).update(a.state, a.task, a.type);
+  retarget();
+  updateA11y();
+  updateEmptyState();
+} catch (err) {
+  console.error("Agentville: failed to load the initial snapshot", err);
+  hud.innerHTML = `🏘️ ${escapeHtml(townName)}  ·  <span style="opacity:.8">could not load agents - retrying live</span>`;
+} finally {
+  // town is loaded (or we gave up waiting) — let the curtains part now
+  clearTimeout(curtainSafety);
+  entranceArmed = true;
+}
 
 // Demo villages to eyeball layout (0 = off). Off now — each village shows only its
 // own real agents, so switching tabs gives genuinely different towns.
