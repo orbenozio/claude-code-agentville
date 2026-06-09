@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.7
+
+- Fix the village collapsing into the top-left corner after the panel was hidden
+  behind another tab. The layout now guards against a zero-size canvas, observes the
+  panel container for resizes, and re-lays-out the town when the panel becomes visible
+  again (no more nudging the window to bring it back).
+- Pause the spawn/redraw timers and the render loop while the panel is hidden, so
+  critters and fish don't pile up off-screen and spike when you come back.
+- Accessibility: the canvas now exposes a live text summary of the village, the chat
+  signposts have keyboard-reachable navigation buttons, and important state changes
+  (approval, error, rate-limit, done) are announced.
+- A quiet, agent-less village now shows a "waiting for agents" hint instead of looking
+  like it failed to load, and the entrance curtain can't get stuck if the first load
+  hangs.
+- Crowded runs lay the houses out in concentric rings and the working agents in a grid
+  that stays inside the factory; long agent names are truncated; the HUD keeps its
+  contrast and the settings panel scrolls on a small window.
+
 ## 0.1.6
 
 - Village signposts now cycle only the most-recently-active conversations in the project
