@@ -1622,6 +1622,20 @@ setTimeout(spawnFish, 3000);
 drawTown(); // static scene fills the window
 buildEntrance(); // clouds cover the scene from frame 1 (parts only once armed, below)
 
+// Pixi's resizeTo: window only re-measures on a window `resize` event - which a VS Code
+// webview does NOT fire when only the panel (not the OS window) changes size, e.g. when a
+// hidden tab is shown again. So app.screen stays stale and reflow() lays the town out at
+// the old/0 size -> collapsed in the corner. Drive the resize OURSELVES from the actual
+// container box instead of waiting on Pixi. Returns false while the box is still 0 (panel
+// not laid out yet), so callers can keep retrying until it has real dimensions.
+function fitToContainer(): boolean {
+  const w = appEl.clientWidth;
+  const h = appEl.clientHeight;
+  if (w < 2 || h < 2) return false;
+  if (w !== app.screen.width || h !== app.screen.height) app.renderer.resize(w, h);
+  return true;
+}
+
 // Coalesce a burst of resize events (dragging the panel divider fires dozens/sec, and
 // reflow() rebuilds the whole scene) into one reflow on the next frame.
 let reflowQueued = false;
@@ -1630,6 +1644,7 @@ function scheduleReflow() {
   reflowQueued = true;
   requestAnimationFrame(() => {
     reflowQueued = false;
+    fitToContainer(); // sync the renderer to the real panel box first, THEN lay out
     reflow();
   });
 }
@@ -1797,19 +1812,24 @@ window.agentville.onNeighbors(updateSigns);
 // the renderer/GPU behind another tab (the host pauses the file monitor in tandem).
 window.agentville.onVisibility((visible) => {
   panelVisible = visible;
-  if (visible) {
-    // Pixi's resizeTo: window only applies the new size from inside the ticker, so while
-    // hidden (ticker stopped) any resize is lost and app.screen keeps a stale/0 size.
-    // Re-sync the renderer to the real window, reflow once, THEN restart the loop — this
-    // is what brings the village back without the user having to nudge the window.
-    if (window.innerWidth > 0 && window.innerHeight > 0) {
-      app.renderer.resize(window.innerWidth, window.innerHeight);
-    }
-    reflow();
-    app.ticker.start();
-  } else {
+  if (!visible) {
     app.ticker.stop();
+    return;
   }
+  app.ticker.start();
+  // When a hidden tab is shown again the panel box may still be 0 for a few frames while
+  // the webview re-lays-out. Keep retrying fitToContainer until it reports a real size,
+  // then lay the town out once - so the village snaps back the instant the panel has its
+  // dimensions, instead of sitting collapsed in the corner until some later resize.
+  let tries = 0;
+  const settle = () => {
+    if (fitToContainer()) {
+      reflow();
+    } else if (tries++ < 120) {
+      requestAnimationFrame(settle);
+    }
+  };
+  settle();
 });
 
 // Safety net: never leave the user stuck behind the closed curtain. If the snapshot

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.8
+
+- Actually fix the collapse-to-corner recovery. 0.1.7 still left the village stacked in
+  the corner for a few seconds after showing a hidden tab, because the relayout reused
+  Pixi's stale screen size (a VS Code webview doesn't fire a window resize when only the
+  panel changes). The renderer now measures the real panel box and resizes itself, on
+  both the container observer and the visibility event, so the town snaps back the moment
+  the panel has its dimensions.
+
 ## 0.1.7
 
 - Fix the village collapsing into the top-left corner after the panel was hidden
