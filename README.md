@@ -290,8 +290,7 @@ The project follows a phased plan (see [`TASKS.md`](TASKS.md) for the live track
 
 ## 📄 License
 
-MIT — see the license declared in [`vscode-extension/package.json`](vscode-extension/package.json)
-and [`vscode-extension/LICENSE`](vscode-extension/LICENSE).
+MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Or Benozio.
 
 ---
 
