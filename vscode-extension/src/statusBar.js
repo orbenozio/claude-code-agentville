@@ -9,9 +9,10 @@ let statusBarItem;
  * The tooltip also reflects host-side injection status.
  */
 function create(vscode, context) {
+  const version = context.extension.packageJSON.version;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = 'agentville.open';
-  statusBarItem.text = '$(globe) Agentville';
+  statusBarItem.text = `$(globe) Agentville v${version}`;
   statusBarItem.tooltip = 'Open Agentville 🏘️ (live town view of your Claude agents)';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
