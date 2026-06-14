@@ -18,6 +18,12 @@
   // launcher manifest's "<publisher>.<name>" lowercased.
   var OPEN_URI = 'vscode://orbenozio.agentville-launcher/open';
 
+  // Carry the button's DESIRED on/off state so the host can reconcile (the host can't
+  // message back into Claude's webview, so the button tells it what it wants: open or close).
+  function buildUri() {
+    return OPEN_URI + '?on=' + (townOn ? '1' : '0');
+  }
+
   // Footer selectors — same conventions as Nonstop. Never hardcode full hashed
   // class names; always [class*="prefix_"].
   var FOOTER_SEL = '[class*="inputFooter_"]';
@@ -61,8 +67,23 @@
       'color:#8a8a8a;opacity:.6;transition:color .15s,opacity .15s,background .15s;}' +
       '#agentville-btn svg{display:block;width:18px;height:18px;}' +
       '#agentville-btn:hover{opacity:1;color:#5bb26a;background:rgba(91,178,106,.16);}' +
+      // ON: lit green accent on a subtle green background - overrides the dim base.
+      '#agentville-btn.on{opacity:1;color:#5bb26a;background:rgba(91,178,106,.22);}' +
       '#agentville-btn:active{transform:scale(.92);}';
     document.head.appendChild(st);
+  }
+
+  // Optimistic "lit" state: the town lives in a separate (host-owned) webview tab, so
+  // there is no host->button channel. The button toggles its own lit class in lockstep
+  // with the strict open/close toggle on the host. (Caveat: closing the town via its
+  // editor tab can't notify the button; the next click re-syncs.)
+  var townOn = false;
+  function applyLit() {
+    var b = document.getElementById('agentville-btn');
+    if (b) {
+      if (townOn) b.classList.add('on'); else b.classList.remove('on');
+      b.setAttribute('aria-pressed', townOn ? 'true' : 'false');
+    }
   }
 
   // Open the app via a synthesized anchor click. location.href / window.open are
@@ -70,14 +91,14 @@
   function openAgentville() {
     try {
       var a = document.createElement('a');
-      a.href = OPEN_URI;
+      a.href = buildUri();
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { try { a.remove(); } catch (e) {} }, 0);
     } catch (e) {
       // Last-ditch: try a direct navigation (some hosts honour it for vscode:).
-      try { window.location.href = OPEN_URI; } catch (e2) {}
+      try { window.location.href = buildUri(); } catch (e2) {}
     }
   }
 
@@ -87,6 +108,7 @@
       var bar0 = ensureToolbar();
       var btn0 = document.getElementById('agentville-btn');
       if (bar0 && btn0 && btn0.parentNode !== bar0) bar0.appendChild(btn0);
+      applyLit(); // keep the lit state across Claude's footer re-renders
       return;
     }
     var bar = ensureToolbar();
@@ -105,13 +127,17 @@
       'c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54' +
       'c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2' +
       'v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>';
+    btn.setAttribute('aria-pressed', 'false'); // it's a toggle button
     btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
+      townOn = !townOn; // optimistic toggle, in lockstep with the host
+      applyLit();
       openAgentville();
     });
     bar.appendChild(btn);
+    applyLit(); // re-applied on every re-inject so the lit state survives re-renders
   }
 
   // Boot: re-inject if Claude re-renders the footer (same cadence as Nonstop).

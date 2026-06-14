@@ -184,12 +184,18 @@ async function doSwitch(context, sessionId) {
   return true;
 }
 
-/** Open (or reveal) the Agentville town panel. */
-function openPanel(context) {
+/**
+ * Open / reveal / close the Agentville town panel. The footer toggle button passes
+ * its desired state: desiredOn === false closes it, true (or undefined, e.g. the
+ * status-bar item / command palette) opens or reveals it.
+ */
+function openPanel(context, desiredOn) {
   if (current) {
+    if (desiredOn === false) { current.panel.dispose(); return; } // toggle off
     current.panel.reveal(current.panel.viewColumn || vscode.ViewColumn.Active);
     return;
   }
+  if (desiredOn === false) return; // wants closed and already is - clears a stale lit
 
   const panel = vscode.window.createWebviewPanel('agentville', 'Agentville 🏘️', vscode.ViewColumn.Active, {
     enableScripts: true,

@@ -165,7 +165,15 @@ function activate(context) {
       handleUri(uri) {
         // uri.path is "/open" for vscode://orbenozio.agentville-launcher/open
         const cmd = (uri.path || '').replace(/^\/+/, '').replace(/\/+$/, '');
-        if (cmd === 'open') openPanel(context);
+        if (cmd !== 'open') return;
+        // The toggle button carries its desired state: on=1 -> open, on=0 -> close.
+        let desiredOn;
+        try {
+          const on = new URLSearchParams(uri.query || '').get('on');
+          if (on === '1') desiredOn = true;
+          else if (on === '0') desiredOn = false;
+        } catch (_) { /* ignore */ }
+        openPanel(context, desiredOn);
       },
     })
   );
