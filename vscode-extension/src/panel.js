@@ -22,6 +22,32 @@ function nonce() {
   return s;
 }
 
+// Encode a filesystem path the way Claude Code names its project dirs under
+// ~/.claude/projects/<encoded>: every non-alphanumeric char becomes '-'.
+function encodeProjectDir(fsPath) {
+  return fsPath.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+// Encoded project dirs for THIS VS Code window's workspace folder(s), lowercased
+// (Windows drive-letter casing is inconsistent, so we match case-insensitively).
+function workspaceProjectDirs() {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || !folders.length) return [];
+  return folders.map((f) => encodeProjectDir(f.uri.fsPath).toLowerCase());
+}
+
+// Hottest session belonging to one of this window's workspace folders, so the town
+// reflects THIS window, not whichever conversation happens to be globally hottest.
+async function hottestWorkspaceSession() {
+  const dirs = workspaceProjectDirs();
+  if (!dirs.length) return null;
+  let sessions;
+  try { sessions = await discoverSessions(); } catch (_) { return null; }
+  // discoverSessions is hottest-first; exact dir match (not substring) so e.g.
+  // ".../Diburit" never matches ".../Diburit-main".
+  return sessions.find((s) => dirs.includes(s.projectDir.toLowerCase())) || null;
+}
+
 function renderHtml(webview, extensionPath) {
   const mediaDir = path.join(extensionPath, 'media');
   const uri = (f) => webview.asWebviewUri(vscode.Uri.file(path.join(mediaDir, f))).toString();
@@ -100,9 +126,22 @@ async function activateTarget() {
   });
   current.monitor = monitor;
 
+  // Resolve which village to watch. A pinned target (set by village navigation) wins.
+  // Otherwise scope to THIS window's workspace so we don't show another window's chat.
+  // Only when no folder is open at all do we keep the legacy global-hottest pick.
+  const hasWorkspace = !!(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length);
+  let target = current.target;
+  if (!target && hasWorkspace) target = await hottestWorkspaceSession();
+
   let session;
   try {
-    session = await monitor.start(current.target || undefined);
+    if (target) {
+      session = await monitor.start(target);
+    } else if (!hasWorkspace) {
+      session = await monitor.start(undefined); // standalone-style: no folder, pick global hottest
+    }
+    // else: a folder is open but it has no Claude session yet - leave the town empty
+    // rather than borrow an unrelated window's conversation.
   } catch (e) {
     console.error('[Agentville] monitor.start failed:', e);
   }
