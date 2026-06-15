@@ -1,38 +1,68 @@
 'use strict';
 
 let statusBarItem;
+let vscodeRef;
+let localVersion = '';
+let remoteVersion = '';      // newest version seen from GitHub (empty until checked)
+let injectionTip = 'live town view of your Claude agents'; // detail appended to the tooltip
 
 /**
- * A status-bar globe that launches Agentville. This is the GUARANTEED launch path
- * (the footer button inside Claude's panel is the nicer UX, but its vscode: deep
- * link can be blocked depending on the VS Code build — see LAUNCHER-PLAN review).
- * The tooltip also reflects host-side injection status.
+ * A status-bar globe that launches Agentville (and exposes "Check for updates").
+ * This is the GUARANTEED launch path (the footer button inside Claude's panel is the
+ * nicer UX, but its vscode: deep link can be blocked depending on the VS Code build).
+ *
+ * The label shows the running version (e.g. "Agentville v0.1.8"); when a newer GitHub
+ * release exists it becomes "Agentville v0.1.8 → v0.1.9" on a warning background.
+ * Clicking the item opens a small menu (open town / check for updates) - see the
+ * `agentville.menu` command.
  */
 function create(vscode, context) {
-  const version = context.extension.packageJSON.version;
+  vscodeRef = vscode;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  statusBarItem.command = 'agentville.open';
-  statusBarItem.text = `$(globe) Agentville v${version}`;
-  statusBarItem.tooltip = 'Open Agentville 🏘️ (live town view of your Claude agents)';
+  statusBarItem.command = 'agentville.menu';
+  localVersion = (context.extension && context.extension.packageJSON && context.extension.packageJSON.version) || '';
+  render();
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
   return statusBarItem;
 }
 
+function render() {
+  if (!statusBarItem) return;
+  const ver = localVersion ? ` v${localVersion}` : '';
+  const hasUpdate = remoteVersion && remoteVersion !== localVersion;
+  if (hasUpdate) {
+    statusBarItem.text = `$(cloud-download) Agentville${ver} → v${remoteVersion}`;
+    statusBarItem.tooltip = `Agentville: update available (v${remoteVersion}) - click for options.`;
+    statusBarItem.backgroundColor = vscodeRef ? new vscodeRef.ThemeColor('statusBarItem.warningBackground') : undefined;
+  } else {
+    statusBarItem.text = `$(globe) Agentville${ver}`;
+    statusBarItem.tooltip = `Open Agentville 🏘️ - ${injectionTip}`;
+    statusBarItem.backgroundColor = undefined;
+  }
+}
+
 /**
- * Reflect the result of a checkAndInject pass in the tooltip (the command stays
- * "agentville.open" regardless so the click always launches the app).
+ * Reflect the result of a checkAndInject pass in the tooltip detail (the command stays
+ * "agentville.menu" regardless so the click always opens the launch menu).
  * @param {{changed:number, targets:number}} r
  */
 function reflect(r) {
   if (!statusBarItem) return;
   if (!r || r.targets === 0) {
-    statusBarItem.tooltip = 'Open Agentville 🏘️ — note: no Claude Code panel found to add the footer button to.';
+    injectionTip = 'note: no Claude Code panel found to add the footer button to';
   } else if (r.changed > 0) {
-    statusBarItem.tooltip = 'Open Agentville 🏘️ — footer button injected; reload the Claude window to show it.';
+    injectionTip = 'footer button injected; reload the Claude window to show it';
   } else {
-    statusBarItem.tooltip = 'Open Agentville 🏘️ (footer button active in the Claude panel).';
+    injectionTip = 'footer button active in the Claude panel';
   }
+  render();
 }
 
-module.exports = { create, reflect };
+/** Reflect an update check: badge the item when a newer release exists. */
+function reflectUpdate(remote) {
+  remoteVersion = remote || '';
+  render();
+}
+
+module.exports = { create, reflect, reflectUpdate };

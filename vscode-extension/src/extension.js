@@ -9,6 +9,7 @@ const injector = require('./injector');
 const { writeAndVerify } = require('./atomicWrite');
 const { resolveTargets } = require('./targets/claude-code');
 const statusBar = require('./statusBar');
+const updater = require('./updater');
 const { openPanel } = require('./panel');
 
 let reinjectTimer = null;
@@ -140,6 +141,24 @@ function offerReload() {
   });
 }
 
+/** Background update check that badges the status bar; controlled by a setting. */
+function backgroundUpdateCheck(context) {
+  if (!getConfig().get('autoUpdateCheck', true)) return;
+  updater.checkForUpdate(vscode, context, {
+    interactive: false,
+    onResult: (r) => statusBar.reflectUpdate(r.remoteVersion),
+  }).catch((err) => console.error('[Agentville] update check failed:', err));
+}
+
+/** The status-bar click target: a tiny menu (open town / check for updates). */
+async function showMenu(context) {
+  const OPEN = '$(rocket) Open Agentville';
+  const UPDATE = '$(sync) Check for Updates';
+  const pick = await vscode.window.showQuickPick([OPEN, UPDATE], { placeHolder: 'Agentville 🏘️' });
+  if (pick === OPEN) openPanel(context);
+  else if (pick === UPDATE) updater.checkForUpdate(vscode, context, { interactive: true, onResult: (r) => statusBar.reflectUpdate(r.remoteVersion) });
+}
+
 function activate(context) {
   // Register the launch paths FIRST, before anything that can throw (e.g. reading
   // the webview script off disk). onUri can activate this extension via the footer
@@ -156,7 +175,12 @@ function activate(context) {
     vscode.commands.registerCommand('agentville.removeInjection', () => {
       const n = removeInjection();
       vscode.window.showInformationMessage(`Agentville: removed injection from ${n} target(s). Reload to apply.`);
-    })
+    }),
+    vscode.commands.registerCommand('agentville.checkForUpdate', () =>
+      updater.checkForUpdate(vscode, context, { interactive: true, onResult: (r) => statusBar.reflectUpdate(r.remoteVersion) }),
+    ),
+    // Status-bar click target (not contributed to the palette to avoid clutter).
+    vscode.commands.registerCommand('agentville.menu', () => showMenu(context))
   );
 
   // The footer button's vscode: deep link arrives here.
@@ -200,6 +224,10 @@ function activate(context) {
     console.error('[Agentville] injection setup failed:', err);
     statusBar.reflect({ changed: 0, targets: 0 });
   }
+
+  // Independent of injection: a hand-installed VSIX has no marketplace auto-update,
+  // so check GitHub for a newer release on startup (throttled to once a day).
+  backgroundUpdateCheck(context);
 }
 
 function deactivate() {

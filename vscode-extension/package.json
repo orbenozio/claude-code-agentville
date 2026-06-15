@@ -45,6 +45,10 @@
       {
         "command": "agentville.removeInjection",
         "title": "Agentville: Remove button from Claude panel"
+      },
+      {
+        "command": "agentville.checkForUpdate",
+        "title": "Agentville: Check for Updates"
       }
     ],
     "configuration": {
@@ -61,6 +65,11 @@
           "minimum": 0,
           "maximum": 48,
           "description": "How often (hours) to re-check/re-add the button after Claude Code updates (0 = disabled)."
+        },
+        "agentville.autoUpdateCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check GitHub for a newer release on startup (at most once a day) and offer to install it. The status-bar item shows when an update is available."
         }
       }
     }
