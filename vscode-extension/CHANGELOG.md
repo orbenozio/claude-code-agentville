@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.9
+
+- Scope the town to the current VS Code window's workspace. With several windows open,
+  the panel showed whichever conversation was globally hottest instead of this window's
+  chat; it now picks the hottest Claude session belonging to this window's workspace
+  folder, and leaves the town empty rather than borrowing an unrelated window's chat.
+- The footer button in the Claude panel is now a lit toggle: it stays highlighted while
+  the town is open and toggles it closed on the next click, matching the shared
+  #orb-tools toolbar convention.
+- The status-bar item shows the running version (e.g. "Agentville v0.1.9").
+- Self-update for the GitHub-distributed VSIX: on startup (at most once a day) the
+  extension checks GitHub for a newer release and offers a one-click "Update now" that
+  installs the latest build in place. The status bar badges when an update is available,
+  and a new "Agentville: Check for Updates" command plus an "agentville.autoUpdateCheck"
+  setting let you check on demand or disable the startup check.
+
 ## 0.1.8
 
 - Actually fix the collapse-to-corner recovery. 0.1.7 still left the village stacked in
