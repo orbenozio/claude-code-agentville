@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.14
+
+- Fix the toggle landing one click late (icon lit but nothing opened; the next click
+  opened/closed the wrong thing). The click handler called `applyLit()`, which rewrote the
+  link's `href` to the *next* click's state — and it ran before VSCode's link interceptor
+  read the href, so every open/close was off by one. The href is now aimed at the current
+  activation's state on pointer/key DOWN only, and `applyLit()` touches the lit class
+  exclusively. First click opens, next click closes, cleanly.
+
 ## 0.1.13
 
 - The footer button finally opens the town without blanking Claude's chat. Claude's
