@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.11
+
+- Fix the footer button no longer opening the town. 0.1.10 added `target="_blank"` to the
+  injected deep-link anchor to stop it blanking Claude's chat — but for a `vscode:` URL
+  `_blank` prevents the click from reaching `env.openExternal`, so the deep link never
+  fired and the button only toggled its lit state. Reverted to a plain same-frame anchor
+  click (which VSCode routes to `openExternal` → our UriHandler → `openPanel`, the same
+  method the status-bar item calls). The chat-blanking that 0.1.10 was really worried
+  about is already prevented by the extension-host guards in `panel.js`, so `_blank` was
+  both unnecessary and breaking.
+
 ## 0.1.10
 
 - Fix the footer button blanking Claude Code's chat. Clicking the 🌍 button injected into
