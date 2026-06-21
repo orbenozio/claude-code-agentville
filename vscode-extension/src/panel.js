@@ -115,59 +115,84 @@ async function computeNeighbors(monitor) {
   return out;
 }
 
+// Post into the webview without ever letting a throw escape. The panel can be
+// disposed mid-await (e.g. the user closed it, or another switch superseded us);
+// postMessage on a dead webview throws, and if that throw bubbles out of an async
+// handler it becomes an unhandled rejection that can destabilize the SHARED
+// extension host — which is what blanks Claude Code's own chat webview. Always
+// swallow it here.
+function safePost(panel, message) {
+  try { panel.webview.postMessage(message); } catch (_) { /* webview gone */ }
+}
+
 // (Re)start the monitor for current.target (or hottest) and tell the webview about
 // the session + its sibling villages. Fired on every webview 'ready' (incl. reloads).
+//
+// The ENTIRE body is wrapped so nothing in the resolve→start→post path can reject
+// into the message handler. Crucially this matters most when NO folder is open:
+// that is the only path that auto-starts the global-hottest monitor, so an
+// exception here (discovery, watchers, a disposed panel) would otherwise take down
+// the shared host and leave both the town AND the live Claude chat dead until reload.
 async function activateTarget() {
   if (!current) return;
   if (current.monitor) { try { current.monitor.stop(); } catch (_) {} current.monitor = null; }
   const panel = current.panel;
   const monitor = new SessionMonitor((changes) => {
-    if (current && current.panel === panel) panel.webview.postMessage({ type: 'agent-diff', changes });
+    if (current && current.panel === panel) safePost(panel, { type: 'agent-diff', changes });
   });
   current.monitor = monitor;
 
-  // Resolve which village to watch. A pinned target (set by village navigation) wins.
-  // Otherwise scope to THIS window's workspace so we don't show another window's chat.
-  // Only when no folder is open at all do we keep the legacy global-hottest pick.
-  const hasWorkspace = !!(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length);
-  let target = current.target;
-  if (!target && hasWorkspace) target = await hottestWorkspaceSession();
+  try {
+    // Resolve which village to watch. A pinned target (set by village navigation) wins.
+    // Otherwise scope to THIS window's workspace so we don't show another window's chat.
+    // Only when no folder is open at all do we keep the legacy global-hottest pick.
+    const hasWorkspace = !!(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length);
+    let target = current.target;
+    if (!target && hasWorkspace) target = await hottestWorkspaceSession();
 
-  let session;
-  try {
-    if (target) {
-      session = await monitor.start(target);
-    } else if (!hasWorkspace) {
-      session = await monitor.start(undefined); // standalone-style: no folder, pick global hottest
+    let session;
+    try {
+      if (target) {
+        session = await monitor.start(target);
+      } else if (!hasWorkspace) {
+        session = await monitor.start(undefined); // standalone-style: no folder, pick global hottest
+      }
+      // else: a folder is open but it has no Claude session yet - leave the town empty
+      // rather than borrow an unrelated window's conversation.
+    } catch (e) {
+      console.error('[Agentville] monitor.start failed:', e);
     }
-    // else: a folder is open but it has no Claude session yet - leave the town empty
-    // rather than borrow an unrelated window's conversation.
+    // panel closed or another switch superseded us while start() was awaiting — don't
+    // leak this monitor's watchers/timer, and don't post into a stale/closed webview.
+    if (!current || current.monitor !== monitor) {
+      try { monitor.stop(); } catch (_) {}
+      return;
+    }
+    let title = '';
+    if (session) { try { title = await sessionTitle(session.mainFile); } catch (_) {} }
+    safePost(panel, {
+      type: 'session-info',
+      info: session ? { projectName: monitor.projectName || 'project', sessionId: session.sessionId, title } : null,
+    });
+    let neighbors = { left: null, right: null };
+    try { neighbors = await computeNeighbors(monitor); } catch (e) { console.error('[Agentville] neighbors failed:', e); }
+    safePost(panel, { type: 'neighbors', neighbors });
+
+    // If the panel was opened in a background column (not the active tab), onDidChangeViewState
+    // won't have fired yet — sync the initial visibility so we don't run the monitor + render
+    // loop full-tilt behind another tab, competing with Claude for the shared host.
+    if (!panel.visible) {
+      try { monitor.pause(); } catch (_) {}
+      safePost(panel, { type: 'visibility', visible: false });
+    }
   } catch (e) {
-    console.error('[Agentville] monitor.start failed:', e);
-  }
-  // panel closed or another switch superseded us while start() was awaiting — don't
-  // leak this monitor's watchers/timer, and don't post into a stale/closed webview.
-  if (!current || current.monitor !== monitor) {
-    try { monitor.stop(); } catch (_) {}
-    return;
-  }
-  let title = '';
-  if (session) { try { title = await sessionTitle(session.mainFile); } catch (_) {} }
-  panel.webview.postMessage({
-    type: 'session-info',
-    info: session ? { projectName: monitor.projectName || 'project', sessionId: session.sessionId, title } : null,
-  });
-  try {
-    panel.webview.postMessage({ type: 'neighbors', neighbors: await computeNeighbors(monitor) });
-  } catch (e) {
-    console.error('[Agentville] neighbors failed:', e);
-  }
-  // If the panel was opened in a background column (not the active tab), onDidChangeViewState
-  // won't have fired yet — sync the initial visibility so we don't run the monitor + render
-  // loop full-tilt behind another tab, competing with Claude for the shared host.
-  if (!panel.visible) {
-    try { monitor.pause(); } catch (_) {}
-    try { panel.webview.postMessage({ type: 'visibility', visible: false }); } catch (_) {}
+    // Last-resort guard: whatever failed, never let it reach the host. Tear the
+    // monitor down and leave the webview in a stable EMPTY town instead of a
+    // half-started one, so the panel still opens (rather than hanging blank).
+    console.error('[Agentville] activateTarget failed:', e);
+    if (current && current.monitor === monitor) { try { monitor.stop(); } catch (_) {} current.monitor = null; }
+    safePost(panel, { type: 'session-info', info: null });
+    safePost(panel, { type: 'neighbors', neighbors: { left: null, right: null } });
   }
 }
 
@@ -206,6 +231,7 @@ function openPanel(context, desiredOn) {
   panel.webview.html = renderHtml(panel.webview, context.extensionPath);
 
   panel.webview.onDidReceiveMessage(async (msg) => {
+   try {
     if (!msg) return;
     if (msg.type === 'weberror') { console.error('[Agentville webview]', msg.message); return; }
     if (msg.type === 'ready') { await activateTarget(); return; }
@@ -236,6 +262,11 @@ function openPanel(context, desiredOn) {
       }
       panel.webview.postMessage({ type: 'response', id: msg.id, result });
     }
+   } catch (e) {
+    // Never let a handler rejection escape into the shared extension host — an
+    // unhandled rejection here can blank Claude Code's own webview (see safePost).
+    console.error('[Agentville] message handler failed:', msg && msg.type, e);
+   }
   }, undefined, context.subscriptions);
 
   // Pause the village while it's hidden behind another tab. The panel + Claude Code
@@ -246,9 +277,11 @@ function openPanel(context, desiredOn) {
     if (!current || current.panel !== panel) return;
     const visible = e.webviewPanel.visible;
     if (visible) {
-      if (current.monitor) void current.monitor.resume();
+      // resume() is async; a rejected promise here would be unhandled and could
+      // ripple into the shared host — swallow it explicitly.
+      if (current.monitor) Promise.resolve(current.monitor.resume()).catch((err) => console.error('[Agentville] resume failed:', err));
     } else if (current.monitor) {
-      current.monitor.pause();
+      try { current.monitor.pause(); } catch (err) { console.error('[Agentville] pause failed:', err); }
     }
     try { panel.webview.postMessage({ type: 'visibility', visible }); } catch (_) {}
   }, undefined, context.subscriptions);

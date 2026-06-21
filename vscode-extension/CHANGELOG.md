@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.10
+
+- Harden the town panel so it can never take down Claude Code's own chat. Opening the
+  panel (most reproducibly with no folder open, where the panel auto-attaches to the
+  globally hottest session) could throw an unhandled rejection in the shared extension
+  host — blanking Claude's chat webview and leaving the town unable to open, recoverable
+  only by reloading the conversation. The whole activateTarget path, the webview message
+  handler, every postMessage (via a new safePost helper), and the async monitor.resume()
+  on view-state changes are now wrapped, so a failure leaves a stable empty town instead
+  of rippling into the host.
+
 ## 0.1.9
 
 - Scope the town to the current VS Code window's workspace. With several windows open,
