@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.12
+
+- Actually stop the footer button from blanking Claude's chat. The root cause was
+  webview-side, not host-side: clicking the injected `<a href="vscode://…">` navigated
+  Claude's own top frame to the vscode: URI, blanking the chat ("the renderer
+  disappears"). (Proof it was never the panel host: opening the same `openPanel` from the
+  status-bar item always worked.) The deep link is now aimed at a throwaway hidden
+  `<iframe>` via a named anchor target — `env.openExternal` still fires (→ UriHandler →
+  openPanel), but the navigation is contained to the sink frame and the chat frame is
+  never touched.
+
 ## 0.1.11
 
 - Fix the footer button no longer opening the town. 0.1.10 added `target="_blank"` to the

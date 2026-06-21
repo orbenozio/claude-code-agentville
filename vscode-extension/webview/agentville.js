@@ -86,28 +86,45 @@
     }
   }
 
-  // Open the app via a synthesized anchor click. The injected button runs inside
-  // Claude's webview — which WE don't own (Claude holds acquireVsCodeApi), so there is
-  // no postMessage channel to our host. The ONLY way to reach the extension is a
-  // vscode: deep link: VSCode intercepts a same-frame <a> click to a non-http scheme
-  // and routes it to env.openExternal, which fires our UriHandler -> openPanel (the very
-  // method the status-bar item calls).
+  // Open the app via a vscode: deep link. The injected button runs inside Claude's
+  // webview — which WE don't own (Claude holds acquireVsCodeApi), so there is no
+  // postMessage channel to our host. The only way to reach the extension is to navigate
+  // to a vscode: URI, which VSCode routes to env.openExternal -> our UriHandler ->
+  // openPanel (the exact method the status-bar item calls, which is why that path works).
   //
-  // Do NOT set target="_blank": for a vscode: URL it stops the click from reaching
-  // openExternal, so nothing opens (the button just toggles its lit state). And do NOT
-  // fall back to window.location.href — navigating the top frame to a vscode: URI blanks
-  // Claude's webview. The host side (panel.js) is what guards against a broken open; here
-  // we only need to deliver the deep link.
+  // The hard part is doing this WITHOUT killing the chat. A plain same-frame <a> click (or
+  // window.location.href) navigates Claude's own top frame to the vscode: URI and blanks
+  // the chat ("the renderer disappears"); target="_blank" avoids that but then never
+  // reaches openExternal, so nothing opens. The fix: aim the navigation at a throwaway
+  // hidden IFRAME via a named target. The deep link still fires openExternal, but the
+  // navigation is contained to the sink frame and Claude's chat frame is never touched.
+  var SINK_NAME = 'agentville-sink';
+  function ensureSink() {
+    var f = document.getElementById(SINK_NAME);
+    if (f && f.isConnected) return f;
+    f = document.createElement('iframe');
+    f.id = SINK_NAME;
+    f.name = SINK_NAME;
+    f.setAttribute('aria-hidden', 'true');
+    f.tabIndex = -1;
+    f.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:0;height:0;border:0;';
+    document.body.appendChild(f);
+    return f;
+  }
   function openAgentville() {
     try {
+      ensureSink();
       var a = document.createElement('a');
       a.href = buildUri();
+      a.target = SINK_NAME; // navigate the hidden iframe, NOT the chat's top frame
+      a.rel = 'noopener';
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { try { a.remove(); } catch (e) {} }, 0);
     } catch (e) {
-      // No-op: the status-bar item + command palette remain the guaranteed open path.
+      // No-op: never navigate the top frame. The status-bar item + command palette
+      // remain the guaranteed open path.
     }
   }
 
