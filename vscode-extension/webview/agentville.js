@@ -88,17 +88,28 @@
 
   // Open the app via a synthesized anchor click. location.href / window.open are
   // blocked in the sandboxed webview; only an <a> click reaches env.openExternal.
+  //
+  // The anchor MUST be target="_blank". Without it the click navigates THIS (Claude's)
+  // webview top frame to the vscode: URI — a scheme the sandboxed page can't load — which
+  // blanks the chat ("the renderer dies") and never reaches our UriHandler, so the town
+  // doesn't open. _blank routes the click through the host's external-link handler
+  // instead, which fires the UriHandler and leaves Claude's chat untouched. (The status-
+  // bar item works precisely because it calls the host command directly, with no webview
+  // navigation — which is the symptom that pinned this down.)
   function openAgentville() {
     try {
       var a = document.createElement('a');
       a.href = buildUri();
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { try { a.remove(); } catch (e) {} }, 0);
     } catch (e) {
-      // Last-ditch: try a direct navigation (some hosts honour it for vscode:).
-      try { window.location.href = buildUri(); } catch (e2) {}
+      // Deliberately NO window.location.href fallback: navigating the top frame to a
+      // vscode: URI is exactly what blanks Claude's webview. The status-bar item and
+      // command palette remain the guaranteed, non-destructive way to open the town.
     }
   }
 

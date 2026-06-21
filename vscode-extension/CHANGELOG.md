@@ -2,6 +2,15 @@
 
 ## 0.1.10
 
+- Fix the footer button blanking Claude Code's chat. Clicking the 🌍 button injected into
+  the Claude panel synthesized an `<a href="vscode://…">` click with no `target`, which
+  navigated Claude's own webview top frame to the vscode: URI — a scheme the sandboxed
+  page can't load — blanking the chat ("the renderer dies") while the deep link never
+  reached the host, so the town didn't open. (Opening from the status-bar item kept
+  working because it calls the host command directly, with no webview navigation — the
+  clue that pinned this down.) The anchor is now `target="_blank"`, routed through the
+  host's external-link handler, and the destructive `window.location.href` fallback is
+  removed.
 - Harden the town panel so it can never take down Claude Code's own chat. Opening the
   panel (most reproducibly with no folder open, where the panel auto-attaches to the
   globally hottest session) could throw an unhandled rejection in the shared extension
