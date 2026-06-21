@@ -86,30 +86,28 @@
     }
   }
 
-  // Open the app via a synthesized anchor click. location.href / window.open are
-  // blocked in the sandboxed webview; only an <a> click reaches env.openExternal.
+  // Open the app via a synthesized anchor click. The injected button runs inside
+  // Claude's webview — which WE don't own (Claude holds acquireVsCodeApi), so there is
+  // no postMessage channel to our host. The ONLY way to reach the extension is a
+  // vscode: deep link: VSCode intercepts a same-frame <a> click to a non-http scheme
+  // and routes it to env.openExternal, which fires our UriHandler -> openPanel (the very
+  // method the status-bar item calls).
   //
-  // The anchor MUST be target="_blank". Without it the click navigates THIS (Claude's)
-  // webview top frame to the vscode: URI — a scheme the sandboxed page can't load — which
-  // blanks the chat ("the renderer dies") and never reaches our UriHandler, so the town
-  // doesn't open. _blank routes the click through the host's external-link handler
-  // instead, which fires the UriHandler and leaves Claude's chat untouched. (The status-
-  // bar item works precisely because it calls the host command directly, with no webview
-  // navigation — which is the symptom that pinned this down.)
+  // Do NOT set target="_blank": for a vscode: URL it stops the click from reaching
+  // openExternal, so nothing opens (the button just toggles its lit state). And do NOT
+  // fall back to window.location.href — navigating the top frame to a vscode: URI blanks
+  // Claude's webview. The host side (panel.js) is what guards against a broken open; here
+  // we only need to deliver the deep link.
   function openAgentville() {
     try {
       var a = document.createElement('a');
       a.href = buildUri();
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
       a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { try { a.remove(); } catch (e) {} }, 0);
     } catch (e) {
-      // Deliberately NO window.location.href fallback: navigating the top frame to a
-      // vscode: URI is exactly what blanks Claude's webview. The status-bar item and
-      // command palette remain the guaranteed, non-destructive way to open the town.
+      // No-op: the status-bar item + command palette remain the guaranteed open path.
     }
   }
 
