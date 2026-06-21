@@ -9,6 +9,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.1.10 (tag v<version> is created)'
+        required: true
+        default: '0.1.10'
 
 permissions:
   contents: write
@@ -41,10 +46,22 @@ jobs:
           npx --yes @vscode/vsce@latest package --allow-missing-repository --no-dependencies
           cp agentville-launcher-*.vsix agentville-launcher.vsix
 
+      # Tag from the pushed ref (push event) or from the dispatch input. On a
+      # workflow_dispatch run the release action creates the tag at this commit.
+      - name: Compute tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: Agentville Launcher ${{ github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Agentville Launcher ${{ steps.tag.outputs.tag }}
           files: |
             vscode-extension/agentville-launcher-*.vsix
             vscode-extension/agentville-launcher.vsix
