@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.13
+
+- The footer button finally opens the town without blanking Claude's chat. Claude's
+  webview is a locked-down sandbox (`frame-src 'self'`, no `allow-popups`), so every
+  programmatic channel is blocked: a hidden iframe is CSP-blocked, `window.open` is
+  popup-blocked, and a *synthesized* anchor click arrives with `event.view === null` so
+  VSCode's link interceptor bails and the frame self-navigates to the vscode: URI,
+  blanking the chat. The fix: make the 🌍 button itself a real `<a href="vscode://…">` so
+  a genuine user click is intercepted by VSCode and opened via `env.openExternal` →
+  UriHandler → `openPanel`. The href is kept aimed at the next desired toggle state
+  (open when off, close when on) via `pointerdown`, and the click is left un-prevented so
+  VSCode can handle it.
+
 ## 0.1.12
 
 - Actually stop the footer button from blanking Claude's chat. The root cause was
