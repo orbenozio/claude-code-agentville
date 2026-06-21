@@ -21,6 +21,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # electron is a root devDependency unrelated to the build; its postinstall downloads
+    # a large binary that flakes the runner ("socket hang up"). Skip that download — only
+    # pixi.js + esbuild are needed to build the extension.
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
 
