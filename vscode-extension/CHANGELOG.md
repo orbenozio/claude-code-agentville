@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.15
+
+- Make the footer button a reliable open/close toggle. It previously guessed the town's
+  state and sent `on=1`/`on=0`, which desynced the moment you closed the tab by hand (the
+  button then never reopened it), and a repeated click could be coalesced by VSCode so the
+  tab wouldn't close. Now the button just sends a per-click unique URI and the HOST toggles
+  from the real panel state: open when closed, close when open. Manual closes can no longer
+  wedge it, and the second click always closes. (The optimistic green "lit" indicator was
+  dropped — without a host→webview channel it could only ever guess, and would invert after
+  a manual close; the button now relies on hover/active feedback.)
+
 ## 0.1.14
 
 - Fix the toggle landing one click late (icon lit but nothing opened; the next click
