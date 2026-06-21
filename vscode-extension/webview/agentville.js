@@ -5,11 +5,15 @@
 // It docks a 🌍 globe button into a SHARED toolbar div (#orb-tools) in the footer.
 // The button is a REAL <a href="vscode://…"> link: a genuine user click on it is
 // intercepted by VSCode's built-in webview link handler and routed to env.openExternal
-// -> our UriHandler -> openPanel (the same method the status-bar item uses). The link
-// MUST be a real element clicked by the user — a *synthesized* a.click() arrives with
-// event.view === null, so VSCode's handler bails and the sandboxed frame self-navigates
-// to the vscode: URI, blanking Claude's chat. The status-bar item + command palette are
-// the guaranteed fallback.
+// -> our UriHandler -> togglePanel. The link MUST be a real element clicked by the user
+// — a *synthesized* a.click() arrives with event.view === null, so VSCode's handler
+// bails and the sandboxed frame self-navigates to the vscode: URI, blanking Claude's
+// chat. The status-bar item + command palette are the guaranteed fallback.
+//
+// Open/close is a pure TOGGLE decided by the HOST from the real panel state — the button
+// can't observe whether the town is open (there's no host->Claude-webview channel), and
+// an optimistic on/off flag desynced the instant the user closed the tab by hand. The
+// link just carries a per-click nonce (?t=…) so VSCode never coalesces a repeated click.
 (function () {
   'use strict';
 
@@ -21,10 +25,11 @@
   // launcher manifest's "<publisher>.<name>" lowercased.
   var OPEN_URI = 'vscode://orbenozio.agentville-launcher/open';
 
-  // Carry the button's DESIRED on/off state so the host can reconcile (the host can't
-  // message back into Claude's webview, so the link tells it what it wants: open or close).
-  function uriFor(desiredOn) {
-    return OPEN_URI + '?on=' + (desiredOn ? '1' : '0');
+  // A fresh, unique URI per activation. The host toggles open/close from the real panel
+  // state; the ?t nonce only keeps each openExternal distinct so VSCode never coalesces a
+  // repeated click into a no-op (which left the tab unable to close on the 2nd click).
+  function openUri() {
+    return OPEN_URI + '?t=' + Date.now();
   }
 
   // Footer selectors — same conventions as Nonstop. Never hardcode full hashed
@@ -70,35 +75,16 @@
       'color:#8a8a8a;opacity:.6;transition:color .15s,opacity .15s,background .15s;}' +
       '#agentville-btn svg{display:block;width:18px;height:18px;}' +
       '#agentville-btn:hover{opacity:1;color:#5bb26a;background:rgba(91,178,106,.16);}' +
-      // ON: lit green accent on a subtle green background - overrides the dim base.
-      '#agentville-btn.on{opacity:1;color:#5bb26a;background:rgba(91,178,106,.22);}' +
       '#agentville-btn:active{transform:scale(.92);}';
     document.head.appendChild(st);
   }
 
-  // Optimistic "lit" state: the town lives in a separate (host-owned) webview tab, so
-  // there is no host->button channel. The button toggles its own lit class in lockstep
-  // with the strict open/close toggle on the host. (Caveat: closing the town via its
-  // editor tab can't notify the button; the next click re-syncs.)
-  var townOn = false;
-  function applyLit() {
-    var b = document.getElementById('agentville-btn');
-    if (b) {
-      if (townOn) b.classList.add('on'); else b.classList.remove('on');
-      b.setAttribute('aria-pressed', townOn ? 'true' : 'false');
-    }
-  }
-
-  // Point the link at the action THIS activation should request: open when the town is
-  // off, close when it's on. Set on pointer/key DOWN — i.e. BEFORE the click — so VSCode's
-  // link interceptor reads the right URI. Critically, this is NOT done from applyLit (which
-  // runs inside the click handler, before VSCode reads href): doing so rewrote href to the
-  // NEXT click's value and made every open/close land one click late.
+  // Refresh the link's href to a new unique URI. Done on pointer/key DOWN — i.e. BEFORE
+  // the click — so VSCode's link interceptor reads the fresh URI for this activation.
   function aimHref() {
     var b = document.getElementById('agentville-btn');
-    if (b) b.setAttribute('href', uriFor(!townOn));
+    if (b) b.setAttribute('href', openUri());
   }
-
 
   function injectButton() {
     if (document.getElementById('agentville-btn')) {
@@ -106,7 +92,6 @@
       var bar0 = ensureToolbar();
       var btn0 = document.getElementById('agentville-btn');
       if (bar0 && btn0 && btn0.parentNode !== bar0) bar0.appendChild(btn0);
-      applyLit(); // keep the lit state + href across Claude's footer re-renders
       return;
     }
     var bar = ensureToolbar();
@@ -119,9 +104,9 @@
     var btn = document.createElement('a');
     btn.id = 'agentville-btn';
     btn.setAttribute('role', 'button');
-    btn.href = uriFor(!townOn); // off -> next click opens (on=1)
-    btn.title = 'Open Agentville 🏘️ — live town view of your Claude agents';
-    btn.setAttribute('aria-label', 'Open Agentville');
+    btn.href = openUri();
+    btn.title = 'Toggle Agentville 🏘️ — live town view of your Claude agents';
+    btn.setAttribute('aria-label', 'Toggle Agentville');
     // Inline globe SVG (Material "public"), coloured via currentColor so it renders
     // deterministically in the webview (emoji rendered grey/inconsistently).
     btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
@@ -129,12 +114,11 @@
       'c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54' +
       'c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2' +
       'v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>';
-    btn.setAttribute('aria-pressed', 'false'); // it's a toggle
 
-    // Aim the href at THIS activation's desired state on pointer/key DOWN (fires before
-    // click, so VSCode reads the right URI), and keep the composer focused. Do NOT
-    // preventDefault or stopPropagation on the click itself — VSCode's handler must
-    // receive it to open the link instead of letting the sandboxed frame self-navigate.
+    // Refresh the href on pointer/key DOWN (fires before the click, so VSCode reads a
+    // fresh unique URI) and keep the composer focused. Do NOT preventDefault or
+    // stopPropagation on the click — VSCode's handler must receive it to open the link
+    // instead of letting the sandboxed frame self-navigate.
     btn.addEventListener('mousedown', function (e) {
       e.preventDefault(); // keep the message composer focused
       aimHref();
@@ -142,13 +126,7 @@
     btn.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') aimHref();
     });
-    btn.addEventListener('click', function () {
-      townOn = !townOn; // optimistic toggle, in lockstep with the host
-      applyLit();       // lit class only — must NOT touch href (VSCode may read it after)
-      // no preventDefault: let VSCode open the href via env.openExternal
-    });
     bar.appendChild(btn);
-    applyLit(); // re-applied on every re-inject so the lit state survives re-renders
   }
 
   // Boot: re-inject if Claude re-renders the footer (same cadence as Nonstop).
