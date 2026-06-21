@@ -86,11 +86,19 @@
     if (b) {
       if (townOn) b.classList.add('on'); else b.classList.remove('on');
       b.setAttribute('aria-pressed', townOn ? 'true' : 'false');
-      // Keep the href aimed at what the NEXT click should request (open when off,
-      // close when on), so a real user click always carries the right desired state.
-      b.setAttribute('href', uriFor(!townOn));
     }
   }
+
+  // Point the link at the action THIS activation should request: open when the town is
+  // off, close when it's on. Set on pointer/key DOWN — i.e. BEFORE the click — so VSCode's
+  // link interceptor reads the right URI. Critically, this is NOT done from applyLit (which
+  // runs inside the click handler, before VSCode reads href): doing so rewrote href to the
+  // NEXT click's value and made every open/close land one click late.
+  function aimHref() {
+    var b = document.getElementById('agentville-btn');
+    if (b) b.setAttribute('href', uriFor(!townOn));
+  }
+
 
   function injectButton() {
     if (document.getElementById('agentville-btn')) {
@@ -123,17 +131,20 @@
       'v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>';
     btn.setAttribute('aria-pressed', 'false'); // it's a toggle
 
-    // Set the href to THIS click's desired state on pointerdown (fires before click, so
-    // VSCode reads the right URI), and keep focus in the composer. Do NOT preventDefault
-    // or stopPropagation on the click itself — VSCode's handler must receive it to open
-    // the link instead of letting the frame self-navigate.
+    // Aim the href at THIS activation's desired state on pointer/key DOWN (fires before
+    // click, so VSCode reads the right URI), and keep the composer focused. Do NOT
+    // preventDefault or stopPropagation on the click itself — VSCode's handler must
+    // receive it to open the link instead of letting the sandboxed frame self-navigate.
     btn.addEventListener('mousedown', function (e) {
       e.preventDefault(); // keep the message composer focused
-      btn.setAttribute('href', uriFor(!townOn));
+      aimHref();
+    });
+    btn.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') aimHref();
     });
     btn.addEventListener('click', function () {
       townOn = !townOn; // optimistic toggle, in lockstep with the host
-      applyLit();       // updates lit class + href for the next click
+      applyLit();       // lit class only — must NOT touch href (VSCode may read it after)
       // no preventDefault: let VSCode open the href via env.openExternal
     });
     bar.appendChild(btn);
