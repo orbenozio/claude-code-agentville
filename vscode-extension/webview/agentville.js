@@ -2,11 +2,14 @@
 // Runs inside the Claude Code panel DOM (appended to webview/index.js by the host
 // extension). Wrapped in an IIFE so it never pollutes Claude's globals.
 //
-// It docks a 🌍 globe button into a SHARED toolbar div (#orb-tools) in the footer
-// and, on click, asks the host extension to open the Agentville desktop app via a
-// vscode: deep link (a synthesized anchor click — the only webview→host channel a
-// sandboxed page is reliably allowed to use). The status-bar item + command
-// palette are the guaranteed fallback path if the deep link is blocked.
+// It docks a 🌍 globe button into a SHARED toolbar div (#orb-tools) in the footer.
+// The button is a REAL <a href="vscode://…"> link: a genuine user click on it is
+// intercepted by VSCode's built-in webview link handler and routed to env.openExternal
+// -> our UriHandler -> openPanel (the same method the status-bar item uses). The link
+// MUST be a real element clicked by the user — a *synthesized* a.click() arrives with
+// event.view === null, so VSCode's handler bails and the sandboxed frame self-navigates
+// to the vscode: URI, blanking Claude's chat. The status-bar item + command palette are
+// the guaranteed fallback.
 (function () {
   'use strict';
 
@@ -19,9 +22,9 @@
   var OPEN_URI = 'vscode://orbenozio.agentville-launcher/open';
 
   // Carry the button's DESIRED on/off state so the host can reconcile (the host can't
-  // message back into Claude's webview, so the button tells it what it wants: open or close).
-  function buildUri() {
-    return OPEN_URI + '?on=' + (townOn ? '1' : '0');
+  // message back into Claude's webview, so the link tells it what it wants: open or close).
+  function uriFor(desiredOn) {
+    return OPEN_URI + '?on=' + (desiredOn ? '1' : '0');
   }
 
   // Footer selectors — same conventions as Nonstop. Never hardcode full hashed
@@ -62,8 +65,8 @@
     var st = document.createElement('style');
     st.id = 'agentville-style';
     st.textContent =
-      '#agentville-btn{background:transparent;border:none;cursor:pointer;' +
-      'padding:3px 6px;line-height:0;vertical-align:middle;border-radius:6px;' +
+      '#agentville-btn{display:inline-flex;align-items:center;background:transparent;border:none;cursor:pointer;' +
+      'padding:3px 6px;line-height:0;vertical-align:middle;border-radius:6px;text-decoration:none;' +
       'color:#8a8a8a;opacity:.6;transition:color .15s,opacity .15s,background .15s;}' +
       '#agentville-btn svg{display:block;width:18px;height:18px;}' +
       '#agentville-btn:hover{opacity:1;color:#5bb26a;background:rgba(91,178,106,.16);}' +
@@ -83,48 +86,9 @@
     if (b) {
       if (townOn) b.classList.add('on'); else b.classList.remove('on');
       b.setAttribute('aria-pressed', townOn ? 'true' : 'false');
-    }
-  }
-
-  // Open the app via a vscode: deep link. The injected button runs inside Claude's
-  // webview — which WE don't own (Claude holds acquireVsCodeApi), so there is no
-  // postMessage channel to our host. The only way to reach the extension is to navigate
-  // to a vscode: URI, which VSCode routes to env.openExternal -> our UriHandler ->
-  // openPanel (the exact method the status-bar item calls, which is why that path works).
-  //
-  // The hard part is doing this WITHOUT killing the chat. A plain same-frame <a> click (or
-  // window.location.href) navigates Claude's own top frame to the vscode: URI and blanks
-  // the chat ("the renderer disappears"); target="_blank" avoids that but then never
-  // reaches openExternal, so nothing opens. The fix: aim the navigation at a throwaway
-  // hidden IFRAME via a named target. The deep link still fires openExternal, but the
-  // navigation is contained to the sink frame and Claude's chat frame is never touched.
-  var SINK_NAME = 'agentville-sink';
-  function ensureSink() {
-    var f = document.getElementById(SINK_NAME);
-    if (f && f.isConnected) return f;
-    f = document.createElement('iframe');
-    f.id = SINK_NAME;
-    f.name = SINK_NAME;
-    f.setAttribute('aria-hidden', 'true');
-    f.tabIndex = -1;
-    f.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:0;height:0;border:0;';
-    document.body.appendChild(f);
-    return f;
-  }
-  function openAgentville() {
-    try {
-      ensureSink();
-      var a = document.createElement('a');
-      a.href = buildUri();
-      a.target = SINK_NAME; // navigate the hidden iframe, NOT the chat's top frame
-      a.rel = 'noopener';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(function () { try { a.remove(); } catch (e) {} }, 0);
-    } catch (e) {
-      // No-op: never navigate the top frame. The status-bar item + command palette
-      // remain the guaranteed open path.
+      // Keep the href aimed at what the NEXT click should request (open when off,
+      // close when on), so a real user click always carries the right desired state.
+      b.setAttribute('href', uriFor(!townOn));
     }
   }
 
@@ -134,16 +98,20 @@
       var bar0 = ensureToolbar();
       var btn0 = document.getElementById('agentville-btn');
       if (bar0 && btn0 && btn0.parentNode !== bar0) bar0.appendChild(btn0);
-      applyLit(); // keep the lit state across Claude's footer re-renders
+      applyLit(); // keep the lit state + href across Claude's footer re-renders
       return;
     }
     var bar = ensureToolbar();
     if (!bar) return;
     ensureStyle();
 
-    var btn = document.createElement('button');
+    // A REAL anchor — VSCode intercepts a genuine click on it and opens the vscode: URI
+    // via openExternal, without the sandboxed frame ever navigating. (A <button> +
+    // synthesized a.click() does NOT get intercepted and blanks the chat — see header.)
+    var btn = document.createElement('a');
     btn.id = 'agentville-btn';
-    btn.type = 'button';
+    btn.setAttribute('role', 'button');
+    btn.href = uriFor(!townOn); // off -> next click opens (on=1)
     btn.title = 'Open Agentville 🏘️ — live town view of your Claude agents';
     btn.setAttribute('aria-label', 'Open Agentville');
     // Inline globe SVG (Material "public"), coloured via currentColor so it renders
@@ -153,14 +121,20 @@
       'c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54' +
       'c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2' +
       'v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>';
-    btn.setAttribute('aria-pressed', 'false'); // it's a toggle button
-    btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
+    btn.setAttribute('aria-pressed', 'false'); // it's a toggle
+
+    // Set the href to THIS click's desired state on pointerdown (fires before click, so
+    // VSCode reads the right URI), and keep focus in the composer. Do NOT preventDefault
+    // or stopPropagation on the click itself — VSCode's handler must receive it to open
+    // the link instead of letting the frame self-navigate.
+    btn.addEventListener('mousedown', function (e) {
+      e.preventDefault(); // keep the message composer focused
+      btn.setAttribute('href', uriFor(!townOn));
+    });
+    btn.addEventListener('click', function () {
       townOn = !townOn; // optimistic toggle, in lockstep with the host
-      applyLit();
-      openAgentville();
+      applyLit();       // updates lit class + href for the next click
+      // no preventDefault: let VSCode open the href via env.openExternal
     });
     bar.appendChild(btn);
     applyLit(); // re-applied on every re-inject so the lit state survives re-renders
