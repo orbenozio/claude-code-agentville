@@ -13,3 +13,10 @@ test/**
 # Repo noise.
 .gitignore
 .vscode/**
+
+# Local dev data — never ship (per-project time tracking is private, not runtime).
+.timelog/**
+
+# OneDrive sync-conflict duplicates that landed in the tree.
+**/*-Or-Laptop*
+**/*Or-Laptop*

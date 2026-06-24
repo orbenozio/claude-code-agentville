@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.16
+
+- Lighter on the machine while the town is live. The session file-watchers now poll the
+  busy main log a bit less often and the subagents folder noticeably less often (it was the
+  priciest watch), so the village competes less with Claude for the shared host.
+- Fewer needless redraws: the town only rebuilds its scene on the hourly sky refresh when
+  the time of day actually changes bands, and a burst of agent updates is now applied in a
+  single batched pass instead of one full re-layout per change.
+- Internal cleanup: migrated the renderer off a deprecated Pixi v8 fill API and tightened
+  the standalone window's content-security policy. No visible change.
+
 ## 0.1.15
 
 - Make the footer button a reliable open/close toggle. It previously guessed the town's
