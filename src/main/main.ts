@@ -26,6 +26,14 @@ function createWindow(): void {
   win.removeMenu();
   void win.loadFile(path.join(here, "index.html"));
 
+  // Drive the renderer's render-loop pause: when the window is minimized/hidden the
+  // Pixi ticker stops, matching the VSCode panel's hidden-tab behavior.
+  const sendVisible = (visible: boolean) => win?.webContents.send("visibility", visible);
+  win.on("minimize", () => sendVisible(false));
+  win.on("restore", () => sendVisible(true));
+  win.on("hide", () => sendVisible(false));
+  win.on("show", () => sendVisible(true));
+
   monitor = new SessionMonitor((changes) => {
     win?.webContents.send("agent-diff", changes);
   });
@@ -38,6 +46,11 @@ function createWindow(): void {
 }
 
 ipcMain.handle("get-snapshot", () => monitor?.getSnapshot() ?? []);
+
+// Multi-village controls — VSCode-host features. Standalone has a single village, so
+// these resolve as no-ops; they exist only so the shared renderer's calls don't reject.
+ipcMain.handle("set-max-villages", () => undefined);
+ipcMain.handle("switch-session", () => undefined);
 
 // weather via the main process (no CORS issues) — Open-Meteo, keyless
 ipcMain.handle("get-weather", async (_e, city: string) => {

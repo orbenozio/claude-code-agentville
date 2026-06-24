@@ -87,6 +87,17 @@ function localHour(): number {
   }
 }
 
+// the sky only changes between these four bands — used to skip the 60s town rebuild
+// (full scene + GPU geometry upload) when the time of day hasn't actually shifted.
+function timePhase(): "dawn" | "day" | "dusk" | "night" {
+  const h = localHour();
+  if (h >= 5.5 && h < 8) return "dawn";
+  if (h >= 18 && h < 20) return "dusk";
+  if (h < 5.5 || h >= 20) return "night";
+  return "day";
+}
+let lastTownPhase = "";
+
 let townName = safeLS.get("agentville.town") || "Agentville";
 let projectName = "";
 let currentSessionId = "";
@@ -411,7 +422,7 @@ function updateAmbient() {
     alpha = 0.2;
   } // dusk
   ambientTint.clear();
-  if (alpha > 0) ambientTint.rect(0, 0, W, H).fill(color, alpha);
+  if (alpha > 0) ambientTint.rect(0, 0, W, H).fill({ color: color, alpha: alpha });
 }
 
 // six lampposts around the square; their head sits ~46px above the base point
@@ -436,10 +447,10 @@ function updateLights() {
   if (!on) return;
   for (const p of lampPositions()) {
     const hy = p.y - 50; // lamp head
-    streetLights.circle(p.x, hy, 34).fill(0xffcf7a, 0.22); // soft halo
-    streetLights.circle(p.x, hy, 17).fill(0xffe6ad, 0.45);
+    streetLights.circle(p.x, hy, 34).fill({ color: 0xffcf7a, alpha: 0.22 }); // soft halo
+    streetLights.circle(p.x, hy, 17).fill({ color: 0xffe6ad, alpha: 0.45 });
     streetLights.circle(p.x, hy, 6).fill(0xfff6d8); // bright bulb
-    streetLights.ellipse(p.x, p.y, 24, 9).fill(0xffe6a0, 0.14); // pool on the ground
+    streetLights.ellipse(p.x, p.y, 24, 9).fill({ color: 0xffe6a0, alpha: 0.14 }); // pool on the ground
   }
   // 3 small ground spotlights shining UP onto the welcome sign (not a central blob)
   const sx = app.screen.width / 2;
@@ -447,7 +458,7 @@ function updateLights() {
   const topY = app.screen.height - 84;
   for (const dx of [-54, 0, 54]) {
     const x = sx + dx;
-    streetLights.poly([x - 3, baseY, x - 14, topY, x + 14, topY, x + 3, baseY]).fill(0xffe6a8, 0.14); // light cone
+    streetLights.poly([x - 3, baseY, x - 14, topY, x + 14, topY, x + 3, baseY]).fill({ color: 0xffe6a8, alpha: 0.14 }); // light cone
     streetLights.circle(x, baseY, 3).fill(0xfff2cc); // lit fixture
   }
 }
@@ -471,9 +482,9 @@ function setWeather(kind: WeatherKind) {
     for (let i = 0; i < 90; i++) snowFlakes.push({ x: Math.random() * W, y: Math.random() * H, v: 0.6 + Math.random() * 0.9, sway: 0.3 + Math.random() * 0.6, ph: Math.random() * 6, r: 1.5 + Math.random() * 2 });
   }
   weatherOverlay.clear();
-  if (kind === "clouds") weatherOverlay.rect(0, 0, W, H).fill(0x3a4150, 0.1);
-  else if (kind === "rain" || kind === "thunder") weatherOverlay.rect(0, 0, W, H).fill(0x303743, 0.22);
-  else if (kind === "fog") weatherOverlay.rect(0, 0, W, H).fill(0xdfe6ec, 0.34);
+  if (kind === "clouds") weatherOverlay.rect(0, 0, W, H).fill({ color: 0x3a4150, alpha: 0.1 });
+  else if (kind === "rain" || kind === "thunder") weatherOverlay.rect(0, 0, W, H).fill({ color: 0x303743, alpha: 0.22 });
+  else if (kind === "fog") weatherOverlay.rect(0, 0, W, H).fill({ color: 0xdfe6ec, alpha: 0.34 });
 }
 
 function stepWeather(dt: number) {
@@ -494,7 +505,7 @@ function stepWeather(dt: number) {
     if (weatherKind === "thunder") {
       flashTimer -= dt;
       if (flashTimer <= 0 && Math.random() < 0.008) flashTimer = 6;
-      if (flashTimer > 0) weatherFx.rect(0, 0, W, H).fill(0xffffff, 0.25);
+      if (flashTimer > 0) weatherFx.rect(0, 0, W, H).fill({ color: 0xffffff, alpha: 0.25 });
     }
   } else if (weatherKind === "snow") {
     for (const f of snowFlakes) {
@@ -505,7 +516,7 @@ function stepWeather(dt: number) {
         f.y = -6;
         f.x = Math.random() * W;
       }
-      weatherFx.circle(f.x, f.y, f.r).fill(0xffffff, 0.9);
+      weatherFx.circle(f.x, f.y, f.r).fill({ color: 0xffffff, alpha: 0.9 });
     }
   }
 }
@@ -596,7 +607,7 @@ function drawSky(W: number): Graphics {
     const sx = W * (0.1 + frac * 0.8);
     const sy = skyH * 0.92 - Math.sin(frac * Math.PI) * skyH * 0.62;
     const sun = dawn || dusk ? 0xffb24d : 0xfff2a0;
-    g.circle(sx, sy, 26).fill(sun, 0.25); // glow
+    g.circle(sx, sy, 26).fill({ color: sun, alpha: 0.25 }); // glow
     g.circle(sx, sy, 16).fill(sun);
     // a low moon also rising at dusk
     if (dusk) {
@@ -637,6 +648,7 @@ const FLOWERS = Array.from({ length: 64 }, () => ({
 }));
 
 function drawTown() {
+  lastTownPhase = timePhase();
   // destroy (not just detach) so 60s sky refresh + resizes don't leak GPU geometry
   for (const c of bgStatic.removeChildren()) c.destroy({ children: true });
   for (const c of structStatic.removeChildren()) c.destroy({ children: true });
@@ -686,15 +698,16 @@ function drawTown() {
   const fll = new Text({ text: "TOWN SQUARE", style: { fontFamily: "Segoe UI", fontSize: 13, fontWeight: "800", fill: 0x6a5230 } });
   fll.anchor.set(0.5);
   fll.position.set(cx, cy + ry - 14);
-  floor.addChild(fll);
-  bgStatic.addChild(floor);
+  // label sits at absolute square coords, so attach it to the layer (a Container) rather
+  // than to `floor` (a Graphics) — Pixi v8 only allows Containers to hold children.
+  bgStatic.addChild(floor, fll);
 
   // grand central fountain (scales with the square)
   const fr = Math.min(46, ry * 0.42);
   const fountain = new Graphics();
   fountain.ellipse(cx, cy, fr + 6, (fr + 6) * 0.6).fill(0x86a0b5); // basin rim
   fountain.ellipse(cx, cy, fr, fr * 0.6).fill(0x9fc1dd); // pool
-  fountain.ellipse(cx, cy, fr, fr * 0.6).fill(0x8fb6d6, 0.5);
+  fountain.ellipse(cx, cy, fr, fr * 0.6).fill({ color: 0x8fb6d6, alpha: 0.5 });
   fountain.rect(cx - 5, cy - 34, 10, 36).fill(0x8a93a0); // column
   fountain.circle(cx, cy - 36, 10).fill(0x9fc1dd).stroke({ width: 2, color: 0x7a8fa3 }); // top basin
   fountain.circle(cx - 7, cy - 26, 2).circle(cx + 7, cy - 26, 2).circle(cx, cy - 42, 2.2).fill(0xbfe3ff); // water
@@ -1354,9 +1367,8 @@ function applyChange(c: StateChange) {
   const sp = ensureSprite({ agentId: c.agentId, kind: c.state.kind, type: c.state.type });
   const was = sp.state;
   sp.update(c.after, c.state.task, c.state.type);
-  retarget();
-  updateA11y();
-  updateEmptyState();
+  // retarget()/updateA11y()/updateEmptyState() are each O(sprites); the caller batches
+  // them and runs each once after the whole diff instead of once per change.
   // speak only the transitions that matter to the user (don't narrate every working tick)
   if (c.after !== was && (c.after === "awaitingApproval" || c.after === "error" || c.after === "rateLimited" || c.after === "done")) {
     const who = sp.kind === "main" ? "The mayor" : (c.state.type || "An agent");
@@ -1653,7 +1665,9 @@ window.addEventListener("resize", scheduleReflow); // edge-to-edge reflow on win
 // event, but it does resize the container div — observe it directly so the village keeps
 // filling the panel (and recovers from the collapsed-to-corner state on its own).
 new ResizeObserver(() => scheduleReflow()).observe(appEl);
-setInterval(() => { if (panelVisible) drawTown(); }, 60_000); // refresh sky as the local time of day changes (skip while hidden)
+// refresh sky as the local time of day changes — skip while hidden, and skip when the
+// time-of-day band hasn't actually shifted (avoids a full scene rebuild + GPU upload/min).
+setInterval(() => { if (panelVisible && timePhase() !== lastTownPhase) drawTown(); }, 60_000);
 
 app.ticker.add((time) => {
   const dt = time.deltaTime;
@@ -1805,7 +1819,12 @@ window.agentville.onSessionInfo((info) => {
   updateHud();
 });
 window.agentville.onAgentDiff((changes) => {
+  if (!changes.length) return;
   for (const c of changes) applyChange(c);
+  // coalesced: one O(sprites) pass each per batch, not per change
+  retarget();
+  updateA11y();
+  updateEmptyState();
 });
 window.agentville.onNeighbors(updateSigns);
 // Stop the render loop while the panel is hidden so Pixi's rAF doesn't keep eating

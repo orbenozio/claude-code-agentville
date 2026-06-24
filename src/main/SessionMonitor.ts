@@ -18,6 +18,16 @@ const STALE_AGENT_MS = 180_000;
 // second data channel (SPEC §5.3): hooks write here; we merge it with the JSONL tail.
 const HOOK_EVENTS_FILE = path.join(os.homedir(), ".claude", "agentville", "events.jsonl");
 
+// chokidar polling intervals (ms). usePolling re-stats every target each tick on the
+// shared extension-host event loop, so the cadence is a direct CPU/I-O cost.
+//  - MAIN: the live JSONL Claude is actively appending; pump() is throttled ~120ms
+//    downstream anyway, so a tighter poll than this buys no perceptible liveness.
+//  - DIR: scans the whole subagents directory (one stat per file) — the priciest
+//    watcher, and subagents appear/finish on human timescales, so poll it lazily.
+//  - hooks file is a single, usually-absent path; share the lazy cadence.
+const POLL_MAIN_MS = 400;
+const POLL_DIR_MS = 1000;
+
 /**
  * Live monitor for one session: tails the main JSONL + each subagent file,
  * normalizes, reduces, and emits state diffs. This is the validated spike-0
@@ -111,12 +121,16 @@ export class SessionMonitor {
     const session = this.session;
     if (!session) return;
 
-    const mainWatcher = chokidar.watch(session.mainFile, { usePolling: true, interval: 300, persistent: true });
+    const mainWatcher = chokidar.watch(session.mainFile, {
+      usePolling: true,
+      interval: POLL_MAIN_MS,
+      persistent: true,
+    });
     mainWatcher.on("change", () => this.schedulePump());
 
     const saWatcher = chokidar.watch(session.subagentsDir, {
       usePolling: true,
-      interval: 300,
+      interval: POLL_DIR_MS,
       persistent: true,
       ignoreInitial: false,
     });
@@ -138,7 +152,7 @@ export class SessionMonitor {
     // no-op until the user installs the Agentville hook, see SPIKE-FINDINGS).
     const hookWatcher = chokidar.watch(HOOK_EVENTS_FILE, {
       usePolling: true,
-      interval: 300,
+      interval: POLL_DIR_MS,
       persistent: true,
       ignoreInitial: false,
     });
