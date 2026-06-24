@@ -10,10 +10,15 @@
 // bails and the sandboxed frame self-navigates to the vscode: URI, blanking Claude's
 // chat. The status-bar item + command palette are the guaranteed fallback.
 //
-// Open/close is a pure TOGGLE decided by the HOST from the real panel state — the button
-// can't observe whether the town is open (there's no host->Claude-webview channel), and
-// an optimistic on/off flag desynced the instant the user closed the tab by hand. The
-// link just carries a per-click nonce (?t=…) so VSCode never coalesces a repeated click.
+// The button is an OPTIMISTIC toggle (same convention as the Skill Palette / Nonstop
+// buttons): it keeps its own lit flag and is the source of truth. Each click flips the
+// flag, lights/dims the button, and tells the HOST the DESIRED state via the link's
+// ?on=1|0 query — the host obeys it (openPanel(desiredOn)) instead of deciding for
+// itself, so button and panel stay in lockstep. There's no host->Claude-webview channel,
+// so closing the town tab BY HAND can't dim the button: it stays lit until the next
+// click, which sends on=0; the host sees it's already closed and just clears the stale
+// lit without reopening. The ?t nonce keeps each openExternal unique so VSCode never
+// coalesces a repeated click into a no-op.
 (function () {
   'use strict';
 
@@ -25,11 +30,23 @@
   // launcher manifest's "<publisher>.<name>" lowercased.
   var OPEN_URI = 'vscode://orbenozio.agentville-launcher/open';
 
-  // A fresh, unique URI per activation. The host toggles open/close from the real panel
-  // state; the ?t nonce only keeps each openExternal distinct so VSCode never coalesces a
-  // repeated click into a no-op (which left the tab unable to close on the 2nd click).
-  function openUri() {
-    return OPEN_URI + '?t=' + Date.now();
+  // A fresh, unique URI carrying the DESIRED open state (on=1 open, on=0 close). The ?t
+  // nonce keeps each openExternal distinct so VSCode never coalesces a repeated click into
+  // a no-op (which once left the tab unable to close on the 2nd click).
+  function openUri(on) {
+    return OPEN_URI + '?t=' + Date.now() + '&on=' + (on ? '1' : '0');
+  }
+
+  // Optimistic "lit" state: there's no host->Claude-webview channel, so the button owns
+  // its own state and the host obeys the desired state it sends. Closing the town tab by
+  // hand can't dim the button; the next (on=0) click re-syncs it.
+  var villageOn = false;
+  function applyLit() {
+    var b = document.getElementById('agentville-btn');
+    if (b) {
+      if (villageOn) b.classList.add('on'); else b.classList.remove('on');
+      b.setAttribute('aria-pressed', villageOn ? 'true' : 'false');
+    }
   }
 
   // Footer selectors — same conventions as Nonstop. Never hardcode full hashed
@@ -75,15 +92,17 @@
       'color:#8a8a8a;opacity:.6;transition:color .15s,opacity .15s,background .15s;}' +
       '#agentville-btn svg{display:block;width:18px;height:18px;}' +
       '#agentville-btn:hover{opacity:1;color:#5bb26a;background:rgba(91,178,106,.16);}' +
+      '#agentville-btn.on{opacity:1;color:#5bb26a;background:rgba(91,178,106,.22);}' +
       '#agentville-btn:active{transform:scale(.92);}';
     document.head.appendChild(st);
   }
 
-  // Refresh the link's href to a new unique URI. Done on pointer/key DOWN — i.e. BEFORE
-  // the click — so VSCode's link interceptor reads the fresh URI for this activation.
+  // Refresh the link's href to a fresh URI carrying the DESIRED next state (the opposite
+  // of the current lit flag). Done on pointer/key DOWN — i.e. BEFORE the click — so
+  // VSCode's link interceptor reads the right URI for this activation.
   function aimHref() {
     var b = document.getElementById('agentville-btn');
-    if (b) b.setAttribute('href', openUri());
+    if (b) b.setAttribute('href', openUri(!villageOn));
   }
 
   function injectButton() {
@@ -92,6 +111,7 @@
       var bar0 = ensureToolbar();
       var btn0 = document.getElementById('agentville-btn');
       if (bar0 && btn0 && btn0.parentNode !== bar0) bar0.appendChild(btn0);
+      applyLit(); // keep the lit state through footer re-renders
       return;
     }
     var bar = ensureToolbar();
@@ -104,7 +124,7 @@
     var btn = document.createElement('a');
     btn.id = 'agentville-btn';
     btn.setAttribute('role', 'button');
-    btn.href = openUri();
+    btn.href = openUri(!villageOn);
     btn.title = 'Toggle Agentville 🏘️ — live town view of your Claude agents';
     btn.setAttribute('aria-label', 'Toggle Agentville');
     // Inline globe SVG (Material "public"), coloured via currentColor so it renders
@@ -126,7 +146,15 @@
     btn.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') aimHref();
     });
+    // Optimistic toggle, in lockstep with the desired state sent to the host above.
+    // Do NOT preventDefault/stopPropagation — VSCode's handler must receive the click
+    // to open the vscode: link (see header).
+    btn.addEventListener('click', function () {
+      villageOn = !villageOn;
+      applyLit();
+    });
     bar.appendChild(btn);
+    applyLit(); // re-applied on every re-inject so the lit state survives re-renders
   }
 
   // Boot: re-inject if Claude re-renders the footer (same cadence as Nonstop).

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.17
+
+- The footer button is a lit toggle again, by request. It now keeps an optimistic green
+  "lit" state and is the source of truth: each click flips the state, lights/dims the
+  button, and tells the host the desired state via `on=1`/`on=0`, which the host obeys
+  (open when on, close when off) so button and panel stay in lockstep.
+- Closing the town tab by hand can't dim the button (there is no host->webview channel),
+  so it stays lit until the next click; that click sends `on=0`, the host sees it is
+  already closed and just clears the stale lit without reopening, and the click after that
+  reopens. Opening via the status bar or a second VSCode window won't light the button for
+  the same reason - the lit state reflects this button's own clicks.
+
 ## 0.1.16
 
 - Lighter on the machine while the town is live. The session file-watchers now poll the

@@ -10,7 +10,7 @@ const { writeAndVerify } = require('./atomicWrite');
 const { resolveTargets } = require('./targets/claude-code');
 const statusBar = require('./statusBar');
 const updater = require('./updater');
-const { openPanel, togglePanel } = require('./panel');
+const { openPanel } = require('./panel');
 
 let reinjectTimer = null;
 let lastFocusCheck = 0;
@@ -187,13 +187,19 @@ function activate(context) {
   context.subscriptions.push(
     vscode.window.registerUriHandler({
       handleUri(uri) {
-        // uri.path is "/open" for vscode://orbenozio.agentville-launcher/open?t=<nonce>.
-        // The footer button always sends this; the host toggles from the real panel state
-        // (the ?t nonce only keeps each openExternal unique so VSCode never coalesces a
-        // repeat click). Reveal/close is decided in togglePanel, not by the button.
+        // uri.path is "/open" for vscode://orbenozio.agentville-launcher/open?t=<nonce>&on=1|0.
+        // The footer button is an optimistic toggle and the source of truth: it sends the
+        // DESIRED state via ?on (1 open, 0 close) and the host obeys it, so button and panel
+        // stay in lockstep. on=0 when already closed is a no-op (clears a stale lit). Other
+        // callers (status bar / palette) omit ?on → desiredOn undefined → open/reveal.
         const cmd = (uri.path || '').replace(/^\/+/, '').replace(/\/+$/, '');
         if (cmd !== 'open') return;
-        togglePanel(context);
+        let desiredOn; // undefined = just open/reveal
+        try {
+          const params = new URLSearchParams(uri.query || '');
+          if (params.has('on')) desiredOn = params.get('on') === '1';
+        } catch (_) { /* malformed query → fall back to open/reveal */ }
+        openPanel(context, desiredOn);
       },
     })
   );

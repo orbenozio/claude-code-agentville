@@ -292,16 +292,4 @@ function openPanel(context, desiredOn) {
   }, undefined, context.subscriptions);
 }
 
-/**
- * Toggle the town from the footer button. The button can't observe the real panel
- * state (there's no host->Claude-webview channel) and an optimistic on/off param
- * desynced the moment the user closed the tab by hand. So the button just asks to
- * "toggle" and the HOST decides from the actual state: open when closed, close when
- * open. This is the single source of truth, so manual closes can never wedge it.
- */
-function togglePanel(context) {
-  if (current) { current.panel.dispose(); return; }
-  openPanel(context);
-}
-
-module.exports = { openPanel, togglePanel };
+module.exports = { openPanel };
