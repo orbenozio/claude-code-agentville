@@ -217,16 +217,28 @@ async function doSwitch(context, sessionId) {
 function openPanel(context, desiredOn) {
   if (current) {
     if (desiredOn === false) { current.panel.dispose(); return; } // toggle off
-    current.panel.reveal(current.panel.viewColumn || vscode.ViewColumn.Active);
+    // preserveFocus: keep focus in Claude's panel so the footer button stays clickable.
+    // Otherwise revealing steals focus to this tab and the next click on the (now
+    // unfocused) button is consumed just to re-focus Claude's webview — most visible on
+    // macOS, where the tab then won't close until you manually click back into the chat.
+    current.panel.reveal(current.panel.viewColumn || vscode.ViewColumn.Active, true);
     return;
   }
   if (desiredOn === false) return; // wants closed and already is - clears a stale lit
 
-  const panel = vscode.window.createWebviewPanel('agentville', 'Agentville 🏘️', vscode.ViewColumn.Active, {
-    enableScripts: true,
-    retainContextWhenHidden: true,
-    localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
-  });
+  // preserveFocus: open the town in the active column WITHOUT stealing focus from
+  // Claude's panel, so the footer button stays focused and the next click toggles it
+  // closed (see the reveal() note above — unfocused-webview clicks get eaten on macOS).
+  const panel = vscode.window.createWebviewPanel(
+    'agentville',
+    'Agentville 🏘️',
+    { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'media'))],
+    },
+  );
   current = { panel, monitor: null, target: null, maxVillages: 6 };
   panel.webview.html = renderHtml(panel.webview, context.extensionPath);
 

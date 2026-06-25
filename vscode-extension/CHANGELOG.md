@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.18
+
+- Fix the toggle on macOS: opening the town stole focus to its tab, so the next click on
+  the (now unfocused) footer button was consumed just to re-focus Claude's panel and the
+  tab wouldn't close until you manually clicked back into the chat. The town now opens and
+  reveals with `preserveFocus`, keeping focus in Claude's panel so a second click closes it
+  right away.
+
 ## 0.1.17
 
 - The footer button is a lit toggle again, by request. It now keeps an optimistic green
